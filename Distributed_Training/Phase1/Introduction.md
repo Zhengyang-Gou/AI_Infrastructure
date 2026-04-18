@@ -78,7 +78,7 @@ ZeRO 分为三个阶段：
 
 - ZeRO-3：通信量增加了 1.5x。因为参数也被拆散了，每次做前向或反向计算前，GPU 都需要从别的卡那里把需要的参数临时借过来，算完再丢掉
 
-### Model parallelism
+## Model parallelism
 模型并行将模型分布在多个 GPU 上，拆分模型有多种方法，但最典型的方法是将模型的不同层分布到不同的 GPU 上。
 
 - 在前向传播中： 第一块 GPU 处理一批数据，然后将其传递给下一块 GPU 上的下一组层
@@ -99,15 +99,15 @@ ZeRO 分为三个阶段：
 
 张量并行对于训练单卡显存无法容纳的巨大模型非常有效。它也更快、更高效，因为每个 GPU 可以并行处理其张量切片，并且可以与其他并行方法结合使用。不过，与其它方法一样，张量并行也会增加 GPU 之间的通信开销。
 
-### Hybrid parallelism
+## Hybrid parallelism
 通过组合多种并行方法，以实现更显著的显存节省，并更高效地训练拥有数千亿参数的模型。
 
-#### Data parallelism and pipeline parallelism
+### Data parallelism and pipeline parallelism
 数据并行与流水线并行的组合，会将数据分布在不同的 GPU 组之间，并为了实现流水线并行，将每个小批量进一步划分为更小的微批次。
 
 GPU 0 和 1 可以将微批次数据卸载给 GPU 2 和 3，从而减少空闲等待时间。这种方法通过降低 GPU 的空闲利用率，优化了并行数据处理。
 
-#### ZeRO data parallelism, pipeline parallelism, and model parallelism (3D parallelism)
+### ZeRO data parallelism, pipeline parallelism, and model parallelism (3D parallelism)
 数据并行、流水线并行和模型并行结合在一起，构成了 3D 并行，以优化显存和计算效率。
 
 - 显存效率：通过将模型横跨多个 GPU 进行拆分，并将其划分为多个阶段来构建流水线。这允许 GPU 并行处理微批次数据，从而降低了模型、优化器状态和激活值的显存占用。

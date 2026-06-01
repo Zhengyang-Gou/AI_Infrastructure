@@ -1,0 +1,56 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Virtual environments
+.venv/
+venv/
+env/
+.env
+.env.*
+!.env.example
+
+# Jupyter
+.ipynb_checkpoints/
+
+# Training and experiment outputs
+checkpoints/
+runs/
+wandb/
+mlruns/
+outputs/
+logs/
+*.ckpt
+*.pt
+*.pth
+*.onnx
+*.safetensors
+
+# CUDA / compiled artifacts
+*.o
+*.so
+*.dll
+*.dylib
+*.exe
+*.out
+build/
+dist/
+
+# Editors and OS files
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
+
+# Local agent metadata
+.agents/
+.codex/

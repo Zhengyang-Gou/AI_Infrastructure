@@ -157,3 +157,355 @@ $$a_{\text{new}} = e^{m_{\text{old}} - m_{\text{new}}} a_{\text{old}} + e^{s_{\t
 最后：
 $$o_{\text{new}} = \frac{a_{\text{new}}}{l_{\text{new}}}$$
 这就是从 Online Softmax 到 Online Attention 的第一步
+
+### 从单个元素扩展到一个 block
+FlashAttention 不会一个元素一个元素处理，而是一块一块处理
+
+假设当前处理一个 query:
+$$q_i$$
+
+现在来了一个 block:
+$$K_b \in \mathbb{R}^{B \times d}$$
+$$V_b \in \mathbb{R}^{B \times d}$$
+
+先算这个 block 的 score:
+$$s_b = q_i K_b^T$$
+
+其中：
+$$s_b \in \mathbb{R}^B$$
+
+这个 block 内部的最大值：
+$$m_b = \max(s_b)$$
+
+block 内部的 denominator:
+$$l_b = \sum e^{s_b - m_b}$$
+
+block 内部的 value 加权和：
+$$a_b = \sum e^{s_j - m_b} v_j$$
+
+也可以写成矩阵形式：
+$$a_b = e^{s_b - m_b} V_b$$
+
+### Block-wise Online Attention 更新公式
+现在有旧状态：
+$$m_{\text{old}}, \quad l_{\text{old}}, \quad a_{\text{old}}$$
+
+新 block 有：
+$$m_b, \quad l_b, \quad a_b$$
+
+新的全局最大值：
+$$m_{\text{new}} = \max(m_{\text{old}}, m_b)$$
+
+旧状态缩放因子：
+$$\alpha = e^{m_{\text{old}} - m_{\text{new}}}$$
+
+新 block 缩放因子：
+$$\beta = e^{m_b - m_{\text{new}}}$$
+
+于是：
+$$l_{\text{new}} = \alpha l_{\text{old}} + \beta l_b$$
+$$a_{\text{new}} = \alpha a_{\text{old}} + \beta a_b$$
+
+最后：
+$$o_{\text{new}} = \frac{a_{\text{new}}}{l_{\text{new}}}$$
+
+这组公式就是 Online Attention 的核心
+
+## 单行 FlashAttention 推导
+### 标准做法
+标准 attention 对一个 query 是：
+```
+1. 算所有 score:
+   s = q @ K.T
+
+2. 对 s 做 softmax:
+   p = softmax(s)
+
+3. 加权求和:
+   o = p @ V
+```
+
+数学上：
+$$s_j = q \cdot k_j$$
+$$p_j = \frac{e^{s_j}}{\sum_t e^{s_t}}$$
+$$o = \sum_j p_j v_j$$
+
+FlashAttention 的想法是：
+
+不等完整 $s$ 生成出来，而是一块一块扫过 K/V，边扫边更新 softmax 和输出
+
+### 把 K/V 分块
+假设把 $K, V$ 按行分成多个 block：
+$$K = [K_1; K_2; \dots; K_T]$$
+$$V = [V_1; V_2; \dots; V_T]$$
+
+每个 block：
+$$K_b \in \mathbb{R}^{B \times d}$$
+$$V_b \in \mathbb{R}^{B \times d}$$
+
+对于当前 query:
+$$q \in \mathbb{R}^d$$
+
+每次只算一块 score:
+$$s_b = qK_b^T$$
+
+其中：
+$$s_b \in \mathbb{R}^B$$
+
+### 每个 block 内先算局部信息
+对一个 block：
+$$s_b = qK_b^T$$
+
+先算 block 内最大值：
+$$m_b = \max(s_b)$$
+
+再算 block 内 softmax 分母：
+$$l_b = \sum_{j \in b} e^{s_j - m_b}$$
+
+再算 block 内 value 加权和：
+$$a_b = \sum_{j \in b} e^{s_j - m_b} v_j$$
+
+也可以写成：
+$$a_b = e^{s_b - m_b} V_b$$
+
+注意：
+$$e^{s_b - m_b} \in \mathbb{R}^B$$
+$$V_b \in \mathbb{R}^{B \times d}$$
+
+所以：
+$$a_b \in \mathbb{R}^d$$
+
+### 全局维护三个状态
+扫过 K/V block 的过程中，我们维护：
+$$m, \quad l, \quad a$$
+
+含义是：
+- $m = \text{目前见过的最大 score}$
+- $l = \sum_{\text{seen}} e^{s_j - m}$
+- $a = \sum_{\text{seen}} e^{s_j - m} v_j$
+
+最终输出：
+$$o = \frac{a}{l}$$
+
+初始化：
+$$m = -\infty$$
+$$l = 0$$
+$$a = 0$$
+
+### 核心更新公式
+假设旧状态是：
+$$m_{\text{old}}, l_{\text{old}}, a_{\text{old}}$$
+
+当前 block 的局部信息是：
+$$m_b, l_b, a_b$$
+
+新的最大值：
+$$m_{\text{new}} = \max(m_{\text{old}}, m_b)$$
+
+旧状态缩放：
+$$\alpha = e^{m_{\text{old}} - m_{\text{new}}}$$
+
+当前 block 缩放：
+$$\beta = e^{m_b - m_{\text{new}}}$$
+
+更新 denominator:
+$$l_{\text{new}} = \alpha l_{\text{old}} + \beta l_b$$
+
+更新 numerator:
+$$a_{\text{new}} = \alpha a_{\text{old}} + \beta a_b$$
+
+然后替换：
+$$m \leftarrow m_{\text{new}}$$
+$$l \leftarrow l_{\text{new}}$$
+$$a \leftarrow a_{\text{new}}$$
+
+最后：
+$$o = a / l$$
+
+### 单行 FlashAttention 伪代码
+```
+输入:
+  q: [d]
+  K: [N, d]
+  V: [N, d]
+
+初始化:
+  m = -inf
+  l = 0
+  a = zeros([d])
+
+for each block K_b, V_b:
+
+  s_b = q @ K_b.T     # [B]
+
+  m_b = max(s_b)      # scalar
+
+  p_b = exp(s_b - m_b) # [B]
+
+  l_b = sum(p_b)      # scalar
+
+  a_b = p_b @ V_b     # [d]
+
+  m_new = max(m, m_b)
+
+  alpha = exp(m - m_new)
+  beta  = exp(m_b - m_new)
+
+  l = alpha * l + beta * l_b
+
+  a = alpha * a + beta * a_b
+
+  m = m_new
+
+输出:
+  o = a / l
+```
+
+## Block-wise FlashAttention Forward
+扩展到一组 query：
+$$Q_i \in \mathbb{R}^{B_r \times d}$$
+一次处理 $B_r$ 行 query
+
+$$S_{ij} = Q_i K_j^T$$
+
+其中：
+$$Q_i \in \mathbb{R}^{B_r \times d}$$
+$$K_j \in \mathbb{R}^{B_c \times d}$$
+
+所以：
+$$S_{ij} \in \mathbb{R}^{B_r \times B_c}$$
+
+现在每次不是算一个 score vector，而是算一个 score block
+
+### Block-wise Attention 的整体结构
+```
+for each Q block Q_i:
+    初始化 m_i, l_i, O_i
+    
+    for each K/V block K_j, V_j:
+        算 S_ij = Q_i @ K_j.T
+        用 S_ij 更新 m_i, l_i, O_i
+        
+    写回 O_i
+```
+这里：
+$$m_i \in \mathbb{R}^{B_r}$$
+$$l_i \in \mathbb{R}^{B_r}$$
+$$O_i \in \mathbb{R}^{B_r \times d}$$
+
+每一行 query 都有自己的 $m, l, O$
+
+### 每个 block 内算什么
+对当前 block：
+$$S_{ij} = Q_i K_j^T$$
+
+其中：
+$$S_{ij} \in \mathbb{R}^{B_r \times B_c}$$
+
+对每一行做 row-wise max：
+$$m_{ij} = \text{rowmax}(S_{ij})$$
+
+所以：
+$$m_{ij} \in \mathbb{R}^{B_r}$$
+
+然后算：
+$$P_{ij} = e^{S_{ij} - m_{ij}}$$
+
+注意这里的 $m_{ij} \text{ 要按行 broadcast}$：
+$$P_{ij}[r, c] = e^{S_{ij}[r, c] - m_{ij}[r]}$$
+
+然后：
+$$l_{ij} = \text{rowsum}(P_{ij})$$
+
+所以：
+$$l_{ij} \in \mathbb{R}^{B_r}$$
+
+再算当前 block 对输出的贡献：
+$$A_{ij} = P_{ij} V_j$$
+
+其中：
+$$P_{ij} \in \mathbb{R}^{B_r \times B_c}$$
+$$V_j \in \mathbb{R}^{B_c \times d}$$
+
+所以：
+$$A_{ij} \in \mathbb{R}^{B_r \times d}$$
+
+### 状态更新公式
+旧状态：
+$$m_i, \quad l_i, \quad O_i$$
+
+当前 block：
+$$m_{ij}, \quad l_{ij}, \quad A_{ij}$$
+
+新的 max：
+$$m_i^{\text{new}} = \max(m_i, m_{ij})$$
+
+缩放因子：
+$$\alpha = e^{m_i - m_i^{\text{new}}}$$
+$$\beta = e^{m_{ij} - m_i^{\text{new}}}$$
+
+新的 denominator：
+$$l_i^{\text{new}} = \alpha l_i + \beta l_{ij}$$
+
+如果维护未归一化 accumulator $A_i$，公式是：
+$$A_i^{\text{new}} = \alpha A_i + \beta A_{ij}$$
+
+最后：
+$$O_i^{\text{new}} = \frac{A_i^{\text{new}}}{l_i^{\text{new}}}$$
+
+但实际论文/实现里常直接维护归一化后的 $O_i$，所以公式写成：
+$$O_i^{\text{new}} = \frac{\alpha l_i O_i + \beta A_{ij}}{l_i^{\text{new}}}$$
+
+这和维护 $A_i$ 是等价的，因为：
+$$A_i = l_i O_i$$
+
+### 维度
+```
+Q_i [B_r, d]
+K_j [B_c, d]
+V_j [B_c, d]
+
+S_ij = Q_i @ K_j.T     -> [B_r, B_c]
+P_ij = exp(...)        -> [B_r, B_c]
+A_ij = P_ij @ V_j      -> [B_r, d]
+O_i update             -> [B_r, d]
+```
+
+### Forward 伪代码
+```
+for each Q block Q_i:
+
+    O_i = 0
+    m_i = -inf
+    l_i = 0
+
+    for each K/V block K_j, V_j:
+
+        S_ij = Q_i @ K_j.T
+
+        m_ij = rowmax(S_ij)
+
+        P_ij = exp(S_ij - m_ij[:, None])
+
+        l_ij = rowsum(P_ij)
+
+        A_ij = P_ij @ V_j
+
+        m_new = max(m_i, m_ij)
+
+        alpha = exp(m_i - m_new)
+        beta  = exp(m_ij - m_new)
+
+        l_new = alpha * l_i + beta * l_ij
+
+        O_i = (
+            alpha[:, None] * l_i[:, None] * O_i
+            +
+            beta[:, None] * A_ij
+        ) / l_new[:, None]
+
+        m_i = m_new
+        l_i = l_new
+
+    write O_i
+```

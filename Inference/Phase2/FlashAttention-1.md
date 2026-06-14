@@ -509,3 +509,311 @@ for each Q block Q_i:
 
     write O_i
 ```
+
+## FA1 Forward 伪代码
+### 输入和分块
+设：
+$$Q, K, V \in \mathbb{R}^{N \times d}$$
+
+分块：
+$$Q_i \in \mathbb{R}^{B_r \times d}$$
+$$K_j, V_j \in \mathbb{R}^{B_c \times d}$$
+
+每次计算一个小 score block:
+$$S_{ij} = Q_i K_j^T$$
+
+维度是：
+$$S_{ij} \in \mathbb{R}^{B_r \times B_c}$$
+
+### 每个 Q block 维护什么
+对一个 $Q_i$，维护：
+$$m_i \in \mathbb{R}^{B_r}$$
+$$l_i \in \mathbb{R}^{B_r}$$
+$$O_i \in \mathbb{R}^{B_r \times d}$$
+
+初始化：
+$$m_i = -\infty$$
+$$l_i = 0$$
+$$O_i = 0$$
+
+这里 $m_i, l_i$ 是每一行 query 各自一份
+
+### 一个 block 的计算流程
+当前处理：
+$$Q_i, K_j, V_j$$
+
+先算：
+$$S_{ij} = Q_i K_j^T$$
+
+然后对每一行做局部 max:
+$$m_{ij} = \text{rowmax}(S_{ij})$$
+
+再算未归一化 softmax:
+$$P_{ij} = e^{S_{ij} - m_{ij}}$$
+
+这里 $m_{ij} \text{ 按行 broadcast}$
+
+然后：
+$$l_{ij} = \text{rowsum}(P_{ij})$$
+$$A_{ij} = P_{ij} V_j$$
+
+其中：
+$$A_{ij} \in \mathbb{R}^{B_r \times d}$$
+
+### Online 更新
+旧状态：
+$$m_i, l_i, O_i$$
+
+当前 block:
+$$m_{ij}, l_{ij}, A_{ij}$$
+
+新的 max:
+$$m_i^{\text{new}} = \max(m_i, m_{ij})$$
+
+缩放因子：
+$$\alpha = e^{m_i - m_i^{\text{new}}}$$
+$$\beta = e^{m_{ij} - m_i^{\text{new}}}$$
+
+新的 denominator:
+$$l_i^{\text{new}} = \alpha l_i + \beta l_{ij}$$
+
+新的输出：
+$$O_i^{\text{new}} = \frac{\alpha l_i O_i + \beta A_{ij}}{l_i^{\text{new}}}$$
+
+然后更新：
+$$m_i \leftarrow m_i^{\text{new}}$$
+$$l_i \leftarrow l_i^{\text{new}}$$
+$$O_i \leftarrow O_i^{\text{new}}$$
+
+### FA1 Forward 伪代码
+```
+for each Q block Q_i:
+
+    O_i = 0
+    m_i = -inf
+    l_i = 0
+
+    for each K/V block K_j, V_j:
+
+        S_ij = Q_i @ K_j.T
+
+        m_ij = rowmax(S_ij)
+
+        P_ij = exp(S_ij - m_ij[:, None])
+
+        l_ij = rowsum(P_ij)
+
+        A_ij = P_ij @ V_j
+
+        m_new = max(m_i, m_ij)
+
+        alpha = exp(m_i - m_new)
+        beta  = exp(m_ij - m_new)
+
+        l_new = alpha * l_i + beta * l_ij
+
+        O_i = (
+            alpha[:, None] * l_i[:, None] * O_i
+            +
+            beta[:, None] * A_ij
+        ) / l_new[:, None]
+
+        m_i = m_new
+        l_i = l_new
+
+    write O_i
+```
+
+## IO Complexity
+### 标准 Attention 的 IO 路径
+标准 attention：
+$$S = QK^T$$
+$$P = \text{softmax}(S)$$
+$$O = PV$$
+
+典型执行路径：
+```
+读 Q,K → 写 S
+读 S → 写 P
+读 P,V → 写 O
+```
+
+最大的问题是：
+$$S,P \in \mathbb{R}^{N \times N}$$
+
+所以会产生大量 HBM traffic：
+```
+写 S: N²
+读 S: N²
+写 P: N²
+读 P: N²
+```
+
+也就是至少：$4N^2$ 个元素级别的中间矩阵读写
+
+### FlashAttention 的 IO 路径
+FA1 分块计算：$S_{ij} = Q_i K_j^T$，但：$S_{ij}$ 只在片上内存中临时存在，用完就丢
+
+同样：$P_{ij} = e^{S_{ij} - m_{ij}}$ 也只临时存在，用来算：$P_{ij}V_j$ 然后丢掉
+
+FA1 主要写回的是：$O \in \mathbb{R}^{N \times d}$ 以及 softmax 统计量：$m, l \in \mathbb{R}^N$
+
+所以它避免了完整：$S,P \in \mathbb{R}^{N \times N}$ 的 HBM 读写
+
+## Backward + Recomputation
+为什么反向传播要重算 $P$
+
+Forward 已经知道：
+$$O = \text{softmax}(QK^T)V$$
+
+标准 attention 会保存：
+$$P = \text{softmax}(QK^T)$$
+
+但 FA1 forward 不保存完整 $P$
+
+因为：
+$$P \in \mathbb{R}^{N \times N}$$
+太大
+
+所以 FA1 backward 的核心是：
+
+反向传播时重新按 block 计算 $S_{ij}$ 和 $P_{ij}$，这叫 recomputation
+
+### 标准 Attention Backward 公式
+先看普通 attention：
+$$S = QK^T$$
+$$P = \text{softmax}(S)$$
+$$O = PV$$
+
+给定上游梯度：
+$$dO$$
+
+先有：
+$$dV = P^T dO$$
+
+因为：
+$$O = PV$$
+
+然后：
+$$dP = dO V^T$$
+
+接着 softmax backward：
+$$dS = P \odot (dP - \text{rowsum}(dP \odot P))$$
+
+最后：
+$$dQ = dS K$$
+$$dK = dS^T Q$$
+
+如果 forward 里有 scale：
+$$S = \frac{QK^T}{\sqrt{d}}$$
+
+那么：
+$$dQ = \frac{dS K}{\sqrt{d}}$$
+$$dK = \frac{dS^T Q}{\sqrt{d}}$$
+
+### FA1 的做法
+FA1 forward 不保存完整 $P$
+
+它只保存：
+$$O$$
+
+以及 softmax 统计量，通常可以是：
+$$m, l$$
+
+或者更常见的：
+$$L = \log \sum_j e^{S_{ij}}$$
+也就是每一行的 logsumexp
+
+Backward 时，对每个 block 重新算：
+$$S_{ij} = Q_i K_j^T$$
+
+然后用保存的 softmax 统计量恢复：
+$$P_{ij}$$
+
+如果保存的是 $m, l$，那么：
+$$P_{ij} = \frac{e^{S_{ij} - m_i}}{l_i}$$
+
+如果保存的是 logsumexp：
+$$L_i = m_i + \log l_i$$
+
+那么：
+$$P_{ij} = e^{S_{ij} - L_i}$$
+
+所以不需要保存完整 $P$，只需要能重建当前 block 的 $P_{ij}$
+
+### Block-wise backward 核心流程
+对每个 block pair：
+$$Q_i, K_j, V_j$$
+
+重新计算：
+$$S_{ij} = Q_i K_j^T$$
+
+恢复：
+$$P_{ij} = \text{softmax block}$$
+
+然后贡献梯度：
+$$dV_j += P_{ij}^T dO_i$$
+$$dP_{ij} = dO_i V_j^T$$
+$$dS_{ij} = P_{ij} \odot (dP_{ij} - D_i)$$
+$$dQ_i += dS_{ij} K_j$$
+$$dK_j += dS_{ij}^T Q_i$$
+
+这里最重要的是：$$D_i$$
+
+### $D_i$ 是什么？
+softmax backward 中需要：
+$$\text{rowsum}(dP \odot P)$$
+
+也就是每一行：
+$$D_i = \sum_j dP_{ij} P_{ij}$$
+看起来这也需要完整 $P$
+
+但可以化简，因为：
+$$dP = dO V^T$$
+
+所以：
+$$dP_{ij} = dO_i \cdot v_j$$
+
+于是：
+$$D_i = \sum_j P_{ij} (dO_i \cdot v_j)$$
+
+把 $dO_i$ 提出来：
+$$D_i = dO_i \cdot \sum_j P_{ij} v_j$$
+
+而：
+$$\sum_j P_{ij} v_j = O_i$$
+
+所以：
+$$D_i = dO_i \cdot O_i$$
+
+也就是：
+$$D_i = \text{rowsum}(dO_i \odot O_i)$$
+
+因为 $O_i$ 是 forward 输出，已经保存了；$dO_i$ 是上游梯度
+
+所以 backward 不需要完整 $P$ 来算 $D_i$
+
+### recomputation
+用更多计算，换更少 HBM IO
+
+标准 backward：
+```
+forward 保存完整 P
+backward 读取完整 P
+```
+
+FA1 backward：
+```
+forward 不保存 P
+backward 重新计算 P_ij block
+```
+
+代价：
+$$QK^T$$
+会被重新算一部分
+
+收益：
+$$P \in \mathbb{R}^{N \times N}$$
+不用写入 HBM，也不用从 HBM 读出
+
+在 GPU 上，这通常是划算的，因为 HBM traffic 很贵

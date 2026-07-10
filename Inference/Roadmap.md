@@ -41,3 +41,48 @@
 | 手撕题 | 算法手撕 | MHA 及其变体手撕 | MHA、MQA、GQA、MLA 前向过程实现 |
 | 手撕题 | 算法手撕 | Decode Layer 手撕 | Decode 阶段 Attention、KV Cache 读取、Logits 计算 |
 | 手撕题 | 算法手撕 | MoE 手撕 | Router、Top-k Expert、Expert Parallel、负载均衡 |
+
+LLM 基础原理
+
+→ Transformer 推理流程：Prefill / Decode / KV Cache
+
+→ 推理指标：TTFT / ITL / TPS / QPS / Throughput / Goodput
+
+→ Python / PyTorch：手写 tiny transformer 推理
+
+→ MHA / MQA / GQA / MLA
+
+→ Online Softmax
+
+→ FlashAttention
+
+→ 量化：FP16 / BF16 / INT8 / INT4 / FP8 / KV
+ Cache Quant
+ 
+→ KV Cache 优化：PagedAttention / Prefix Cache / RadixAttention
+
+→ 推理调度：Continuous Batching / Chunked Prefill
+
+→ vLLM：部署、benchmark、源码核心路径
+
+→ SGLang：RadixAttention、prefix cache、structured generation
+
+→ C++ 基础
+
+→ CUDA / GPU 基础
+
+→ 高性能算子：reduce / softmax / layernorm / matmul / attention
+
+→ 通信原语：NCCL / all-reduce / all-gather / reduce-scatter / all-to-all
+
+→ 并行策略：TP / PP / DP / EP
+
+→ MoE：router / experts / grouped GEMM / expert imbalance
+
+→ EPLB
+
+→ PD 分离
+
+→ Speculative Decoding / MTP
+
+→ LeetCode + LeetGPU + 大模型推理手撕

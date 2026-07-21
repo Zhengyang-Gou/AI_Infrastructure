@@ -56,8 +56,7 @@ LLM 基础原理
 
 → FlashAttention
 
-→ 量化：FP16 / BF16 / INT8 / INT4 / FP8 / KV
- Cache Quant
+→ 量化：FP16 / BF16 / INT8 / INT4 / FP8 / KV Cache Quant
  
 → KV Cache 优化：PagedAttention / Prefix Cache / RadixAttention
 

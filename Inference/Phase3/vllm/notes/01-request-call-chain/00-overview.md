@@ -14,16 +14,38 @@
 
 本阶段暂时不深入 Scheduler、KV Cache、模型执行和 Sampling 的内部实现。
 
+## 本章结构
+
+```text
+01-request-call-chain/
+├── 00-overview.md
+├── 01-basic.md
+├── 02-llm.md
+├── 03-offline-utils.md
+├── 04-llm-engine.md
+├── 05-core-client.md
+├── 06-engine-core.md
+├── 07-end-to-end-trace.md
+├── 08-configuration-and-initialization.md
+└── code/                              本章涉及的源码快照与索引
+```
+
+前六篇按请求实际经过的代码顺序展开；`07-end-to-end-trace.md` 将各层重新串成一条完整路径；`08-configuration-and-initialization.md` 补充请求发生之前的引擎装配过程。
+
+源码快照的文件映射和使用方式见 [`code/README.md`](code/README.md)。
+
 ## 阅读顺序
 
-| 顺序 | 文件 | 主要关注点 |
-| --- | --- | --- |
-| 1 | `examples/basic/offline_inference/basic.py` | 用户如何创建 `LLM` 并调用 `generate()` |
-| 2 | `vllm/entrypoints/llm.py` | `LLM.generate()` 如何接收参数并启动离线推理 |
-| 3 | `vllm/entrypoints/offline_utils.py` | 请求提交和引擎循环之间的桥接逻辑 |
-| 4 | `vllm/v1/engine/llm_engine.py` | 输入处理、请求提交和输出处理 |
-| 5 | `vllm/v1/engine/core_client.py` | 前端引擎如何与核心引擎通信 |
-| 6 | `vllm/v1/engine/core.py` | `EngineCore` 如何执行一次核心推理步骤 |
+| 顺序 | 笔记 | 对应源文件 | 主要关注点 |
+| --- | --- | --- | --- |
+| 1 | `01-basic.md` | `examples/basic/offline_inference/basic.py` | 用户如何创建 `LLM` 并调用 `generate()` |
+| 2 | `02-llm.md` | `vllm/entrypoints/llm.py` | `LLM.generate()` 如何接收参数并启动离线推理 |
+| 3 | `03-offline-utils.md` | `vllm/entrypoints/offline_utils.py` | 请求提交和引擎循环之间的桥接逻辑 |
+| 4 | `04-llm-engine.md` | `vllm/v1/engine/llm_engine.py` | 输入处理、请求提交和输出处理 |
+| 5 | `05-core-client.md` | `vllm/v1/engine/core_client.py` | 前端引擎如何与核心引擎通信 |
+| 6 | `06-engine-core.md` | `vllm/v1/engine/core.py` | `EngineCore` 如何执行一次核心推理步骤 |
+| 7 | `07-end-to-end-trace.md` | 上述全部文件 | 将初始化、提交、执行和返回串成完整链路 |
+| 8 | `08-configuration-and-initialization.md` | `vllm/engine/arg_utils.py`、`vllm/config/` | 引擎配置如何在请求到达之前完成装配 |
 
 > `offline_utils.py` 虽然不在最初的五个目标文件中，但实际追踪 `LLM.generate()` 时会经过它，因此需要把它作为连接代码阅读。
 
@@ -138,4 +160,4 @@ PromptType + SamplingParams
 
 ## 补充专题
 
-- `06-configuration-and-initialization.md`：补齐 `EngineArgs → VllmConfig → Platform → Engine` 的初始化链路。
+- `08-configuration-and-initialization.md`：补齐 `EngineArgs → VllmConfig → Platform → Engine` 的初始化链路。

@@ -1,87 +1,53 @@
-| 模块 | 一级方向 | 二级方向 | 学习内容 |
-|---|---|---|---|
-| 大模型推理的背景和意义 | 背景认知 | LLM 原理 | 理解大语言模型基本结构、Transformer、Attention、Prefill、Decode |
-| 大模型推理的背景和意义 | 背景认知 | 推理相关指标 | Latency、Throughput、TTFT、TPOT、QPS、显存占用、吞吐瓶颈 |
-| 基础能力 | 算法基础 | LLM 原理 | Transformer、Attention、KV Cache、Prefill / Decode 流程 |
-| 基础能力 | 算法基础 | 推理相关指标 | 延迟、吞吐、显存、带宽、计算量、算子性能 |
-| 基础能力 | 编程语言基础 | C++ | C++ 基础、内存管理、多线程、性能优化基础 |
-| 基础能力 | 编程语言基础 | Python | Python 基础、PyTorch、推理框架使用与调试 |
-| 大模型推理优化手段 | 算法层面 | 模型轻量化 | 量化 |
-| 大模型推理优化手段 | 算法层面 | 模型轻量化 | 蒸馏 |
-| 大模型推理优化手段 | 算法层面 | 模型轻量化 | 稀疏 |
-| 大模型推理优化手段 | 算法层面 | 优化相关 Attention 变种 | Sage Attention |
-| 大模型推理优化手段 | 算法层面 | 优化相关 Attention 变种 | Lightning Attention |
-| 大模型推理优化手段 | 算法层面 | 优化相关 Attention 变种 | MQA、GQA、MLA 等 |
-| 大模型推理优化手段 | 算法层面 | 其他模块优化 | MoE |
-| 大模型推理优化手段 | 算法层面 | 其他模块优化 | FlashAttention |
-| 大模型推理优化手段 | 算法层面 | 其他模块优化 | Online Softmax |
-| 大模型推理优化手段 | 算法层面 | 其他模块优化 | 其他融合算子 |
-| 大模型推理优化手段 | 框架层面 | 常见推理框架 | vLLM |
-| 大模型推理优化手段 | 框架层面 | 常见推理框架 | SGLang |
-| 大模型推理优化手段 | 框架层面 | KV Cache 相关 | PagedAttention |
-| 大模型推理优化手段 | 框架层面 | KV Cache 相关 | RadixAttention |
-| 大模型推理优化手段 | 框架层面 | KV Cache 相关 | Prefix Cache |
-| 大模型推理优化手段 | 框架层面 | Server 部分 | Continuous Batching |
-| 大模型推理优化手段 | 框架层面 | Server 部分 | Chunked Prefill |
-| 大模型推理优化手段 | 框架层面 | Engine 部分 | 解码策略 |
-| 大模型推理优化手段 | 框架层面 | Engine 部分 | EPLB |
-| 大模型推理优化手段 | 框架层面 | Engine 部分 | MTP |
-| 大模型推理优化手段 | 框架层面 | Engine 部分 | PD 分离架构 |
-| 大模型推理优化手段 | 框架层面 | 并行策略 | TP |
-| 大模型推理优化手段 | 框架层面 | 并行策略 | DP |
-| 大模型推理优化手段 | 框架层面 | 并行策略 | EP |
-| 大模型推理优化手段 | 框架层面 | 并行策略 | PP |
-| 大模型推理优化手段 | 框架层面 | 并行策略 | 各种并行策略的组合 |
-| 大模型推理优化手段 | 框架层面 | 高性能算子实现 | CUDA Kernel、算子融合、矩阵乘优化、Reduce 优化 |
-| 大模型推理优化手段 | 硬件层面 | 通信原语 | AllReduce、AllGather、ReduceScatter、Broadcast、P2P 通信 |
-| 大模型推理优化手段 | 硬件层面 | 推理硬件架构 | GPU 架构、显存层级、带宽、NVLink、PCIe、算力瓶颈分析 |
-| 手撕题 | LeetCode | Hot100 | 常见算法题、数组、链表、树、动态规划、图、回溯 |
-| 手撕题 | LeetGPU | Reduce | GPU Reduce Kernel 手写与优化 |
-| 手撕题 | LeetGPU | 矩阵乘 | GEMM、Tiling、Shared Memory、Tensor Core 优化 |
-| 手撕题 | 算法手撕 | MHA 及其变体手撕 | MHA、MQA、GQA、MLA 前向过程实现 |
-| 手撕题 | 算法手撕 | Decode Layer 手撕 | Decode 阶段 Attention、KV Cache 读取、Logits 计算 |
-| 手撕题 | 算法手撕 | MoE 手撕 | Router、Top-k Expert、Expert Parallel、负载均衡 |
+# LLM 推理学习路线
 
-LLM 基础原理
+按照 **基础 → 最小引擎 → 引擎机制 → vLLM 源码 → 性能分析 → GPU → Triton → CUDA → 集成作品** 推进。01 已有正文，02–09 保留空目录，后续学习时逐步添加内容。
 
-→ Transformer 推理流程：Prefill / Decode / KV Cache
+前八阶段共 **20～23 周**，第九阶段持续迭代。已掌握 01 后，可从 02 开始，后续阶段 02–08 预计 **18～21 周**。
 
-→ 推理指标：TTFT / ITL / TPS / QPS / Throughput / Goodput
+| 阶段 | 时间 | 学什么 | 目标 |
+| --- | ---: | --- | --- |
+| [01. LLM 推理基础](01-LLM-Inference-Basics/README.md) | 2 周 | Prefill、Decode、KV Cache、MHA / GQA / MQA、Sampling | 能解释一次生成请求如何执行 |
+| [02. Mini Inference Engine](02-Mini-Inference-Engine/) | 2 周 | KV Cache、Batch Decode、Request Lifecycle | 自己写一个最小推理引擎 |
+| [03. Engine 核心机制](03-Engine-Core-Mechanisms/) | 3 周 | Scheduler、Continuous Batching、Paged KV Cache、Prefix Cache、Chunked Prefill | 理解现代推理引擎为什么这样设计 |
+| [04. vLLM 源码](04-vLLM-Source/) | 3 周 | Scheduler、KV Cache Manager、Model Runner、Attention Backend | 能追踪 Request 到 Kernel 的完整链路 |
+| [05. Benchmark / Profiling](05-Benchmark-and-Profiling/) | 1～2 周 | TTFT、TPOT、吞吐、并发、显存 | 能判断系统哪里慢 |
+| [06. GPU Architecture](06-GPU-Architecture/) | 2 周 | SM、Warp、HBM、L2、Shared Memory、Tensor Core | 建立 GPU 性能模型 |
+| [07. Triton](07-Triton/) | 3 周 | RMSNorm、Softmax、Matmul、RoPE、Attention | 能自己写 LLM Kernel |
+| [08. CUDA](08-CUDA/) | 4～6 周 | Memory Coalescing、Shared Memory、Occupancy、GEMM、Attention | 能进一步深入 Kernel 优化 |
+| [09. Engine × Kernel](09-Engine-Kernel-Integration/) | 持续 | 替换 / 优化 vLLM Kernel | 形成求职作品集 |
 
-→ Python / PyTorch：手写 tiny transformer 推理
+## 目录安排
 
-→ MHA / MQA / GQA / MLA
+```text
+Inference/
+├── Roadmap.md
+├── 01-LLM-Inference-Basics/       # 已有基础笔记
+├── 02-Mini-Inference-Engine/
+├── 03-Engine-Core-Mechanisms/
+├── 04-vLLM-Source/
+├── 05-Benchmark-and-Profiling/
+├── 06-GPU-Architecture/
+├── 07-Triton/
+├── 08-CUDA/
+├── 09-Engine-Kernel-Integration/
+├── References/                  # 参考索引与扩展主题
+├── Phase2/                      # 已有 Softmax / FlashAttention 资料
+└── Phase3/                      # nano-vLLM / vLLM 源码快照
+```
 
-→ Online Softmax
+## 阶段衔接
 
-→ FlashAttention
+- **02 → 03**：先实现连续 KV Cache 和固定 Batch，再逐步加入动态调度、分页管理与前缀复用。
+- **03 → 04**：带着自己实现中的问题阅读 vLLM，对照模块职责和数据流。
+- **04 → 05**：能追踪执行链路后，建立可复现的基准和瓶颈报告。
+- **05 → 06**：用 GPU 性能模型解释已采集的 Profile。
+- **06 → 07 → 08**：先用 Triton 实现算子，再深入 CUDA 的执行和访存优化。
+- **08 → 09**：把有证据的 Kernel 优化接入引擎，以正确性和端到端收益完成作品。
 
-→ 量化：FP16 / BF16 / INT8 / INT4 / FP8 / KV Cache Quant
- 
-→ KV Cache 优化：PagedAttention / Prefix Cache / RadixAttention
+## 使用方式
 
-→ 推理调度：Continuous Batching / Chunked Prefill
+01 保留现有笔记与导航，02–09 只保留目录。学习时按需新增笔记；代码实验可放在对应阶段的 `code/`，配置与报告放在 `experiments/`，有实际内容时再创建。
 
-→ vLLM：部署、benchmark、源码核心路径
+阶段时间是学习预算，进入下一阶段前优先检查验收项。统一记录硬件、软件版本、运行命令、正确性误差和基准口径，让后续阶段复用前面的结果。
 
-→ SGLang：RadixAttention、prefix cache、structured generation
-
-→ C++ 基础
-
-→ CUDA / GPU 基础
-
-→ 高性能算子：reduce / softmax / layernorm / matmul / attention
-
-→ 通信原语：NCCL / all-reduce / all-gather / reduce-scatter / all-to-all
-
-→ 并行策略：TP / PP / DP / EP
-
-→ MoE：router / experts / grouped GEMM / expert imbalance
-
-→ EPLB
-
-→ PD 分离
-
-→ Speculative Decoding / MTP
-
-→ LeetCode + LeetGPU + 大模型推理手撕
+现有源码与算法笔记通过 [参考索引](References/README.md) 连接；量化、MoE、分布式推理等原有主题保留在 [扩展主题备忘](References/Extended-Topics.md)，按项目需要选学。

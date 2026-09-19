@@ -20,11 +20,10 @@ Transformer 基础
       │     ├── Megatron-LM
       │     └── ZeRO
       └── 大模型推理
-            ├── Prefill、Decode 与 KV Cache
-            ├── Online Softmax 与 FlashAttention
-            ├── Attention 变体
-            ├── nano-vLLM 实现解析
-            └── vLLM 架构与源码精读
+            ├── 01 基础 → 02 最小引擎 → 03 核心机制
+            ├── 04 vLLM 源码 → 05 Benchmark / Profiling
+            ├── 06 GPU 架构 → 07 Triton → 08 CUDA
+            └── 09 Engine × Kernel 作品集
 ```
 
 ## 仓库导航
@@ -32,33 +31,29 @@ Transformer 基础
 | 学习方向 | 主要内容 | 学习入口 |
 | --- | --- | --- |
 | Transformers | 最小 GPT 训练实现与 Notebook | [`Transformers/miniGPT`](Transformers/miniGPT) |
-| CUDA | GPU 架构、执行模型、存储层次与性能基础 | [`CUDA/Phase1/overview.md`](CUDA/Phase1/overview.md) |
+| CUDA | GPU 架构、执行模型、存储层次与性能基础 | [`Inference/06-GPU-Architecture/`](Inference/06-GPU-Architecture/) |
 | 分布式训练 | 并行基础、Megatron-LM、PipeDream 与 ZeRO | [`Distributed_Training/Phase1/Introduction.md`](Distributed_Training/Phase1/Introduction.md) |
-| 推理系统 | 推理生命周期、Attention 优化与推理引擎内部实现 | [`Inference/Phase1/Overview.md`](Inference/Phase1/Overview.md) |
+| 推理系统 | 推理生命周期、Attention 优化与推理引擎内部实现 | [`Inference/Roadmap.md`](Inference/Roadmap.md) |
 
 ## 推理学习路线
 
-推理部分按照“基础概念 → 核心优化 → 工程实现”的顺序展开：
+按以下九阶段推进；01 已有笔记，02–09 暂为空目录。
 
-1. **基础概念**：请求生命周期、Tokenizer、Prefill、Decode、采样、批处理与 KV Cache。
-2. **Attention 优化**：Stable/Online Softmax、FlashAttention 与常见 Attention 变体。
-3. **引擎实现**：先通过 nano-vLLM 理解精简实现，再系统阅读 vLLM 源码。
+1. [LLM 推理基础](Inference/01-LLM-Inference-Basics/README.md)
+2. [Mini Inference Engine](Inference/02-Mini-Inference-Engine/)
+3. [Engine 核心机制](Inference/03-Engine-Core-Mechanisms/)
+4. [vLLM 源码](Inference/04-vLLM-Source/)
+5. [Benchmark / Profiling](Inference/05-Benchmark-and-Profiling/)
+6. [GPU Architecture](Inference/06-GPU-Architecture/)
+7. [Triton](Inference/07-Triton/)
+8. [CUDA](Inference/08-CUDA/)
+9. [Engine × Kernel](Inference/09-Engine-Kernel-Integration/)
 
-vLLM 源码学习进一步拆分为以下专题：
-
-- 请求调用链与引擎初始化；
-- 调度器与 KV Cache 管理；
-- GPU 执行、模型代码与 Attention Backend；
-- 采样、输出处理与在线服务；
-- 多进程与分布式执行；
-- 推测解码与多模态处理；
-- 可观测性、性能分析与 Benchmark。
-
-可以从 [vLLM 学习总览](Inference/Phase3/vllm/notes/01-request-call-chain/00-overview.md)开始，也可以直接浏览完整的 [vLLM 笔记目录](Inference/Phase3/vllm/notes)。
+[查看完整路线与时间安排](Inference/Roadmap.md)。01 已有正文，02–09 的内容将在学习时逐步添加。
 
 ## 使用方式
 
-- 希望系统学习时，可以按照各方向的 Phase 顺序阅读。
+- 希望系统学习推理时，按照 01–09 的编号顺序阅读。
 - 阅读笔记时，通过文内链接在概念、代码路径和相关论文之间跳转。
 - 仓库中的第三方项目与源码快照主要服务于对应笔记；运行或部署前，请以其上游文档为准。
 - 建议在独立 Python 环境中运行实验，并避免将模型权重、Checkpoint、日志和生成结果提交到版本控制。

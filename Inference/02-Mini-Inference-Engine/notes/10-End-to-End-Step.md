@@ -2,6 +2,27 @@
 
 回到完整执行链，串起请求状态、缓存管理、模型前向和采样，再回读第 01 篇的生成循环。
 
+## 本篇在做什么
+
+```mermaid
+flowchart TD
+    A["Sequence：Token、进度、生命周期"] --> B["Scheduler.schedule：选择本轮请求"]
+    C["BlockManager：分配 / 复用 / 扩展物理块"] <--> B
+    B --> D["ModelRunner：组织 Token、位置并设置 Context"]
+    D --> E["Qwen3：Embedding 与各 Decoder 层"]
+    E --> F["每层 Attention：写入新 KV，再读取上下文 KV"]
+    K["GPU 分页 KV Cache"] <--> F
+    F --> G["完成模型前向 → LM Head → rank 0 logits"]
+    G --> H["Sampler：返回候选 Token"]
+    H --> I["postprocess：推进缓存进度，按阶段接受 Token"]
+    I --> J{"请求是否完成？"}
+    J -->|否，继续下一轮| A
+    J -->|是| L["释放缓存引用，交给 generate 收集输出"]
+    I -.->|登记已计算完整块的哈希| C
+```
+
+**读图说明：** 一次 `step()` 把调度决定转成实际 GPU 计算，再把计算结果写回请求状态。`Sequence` 保存跨轮次的请求信息，`BlockManager` 管理物理块元数据，`Context` 只描述本轮前向，GPU KV Cache 保存各层已经算出的 K/V。下面的调用链可与框图对照：Prefill 分块未完成时只推进缓存进度，Prefill 完成或 Decode 后才追加新 Token。
+
 ```
 Scheduler.schedule()
     ↓ 选择 Sequence，分配/扩展 block_table

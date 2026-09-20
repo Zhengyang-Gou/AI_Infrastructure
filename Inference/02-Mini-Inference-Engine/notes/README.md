@@ -17,6 +17,6 @@
 | 09 | [采样与输出 Token](09-Sampling.md) | `sampler.py` |
 | 10 | [一次 Step 的完整数据流](10-End-to-End-Step.md) | 串起一次完整推理步骤 |
 
-第一遍先掌握单卡生成主线；第二遍再细看前缀缓存、Chunked Prefill、张量并行和 CUDA Graph。每篇开头提供对应源码链接，结尾可跳转到前后篇。
+第一遍先掌握单卡生成主线；第二遍再细看前缀缓存、Chunked Prefill、张量并行和 CUDA Graph。每篇开头提供 Mermaid 框图与读图说明，先看清输入、处理过程和输出，再结合对应源码阅读；结尾可跳转到前后篇。
 
 [返回阶段目录](../README.md) · [Nano-vLLM 源码](../source/nano-vllm/)

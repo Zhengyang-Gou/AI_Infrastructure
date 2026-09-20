@@ -4,6 +4,25 @@
 
 对应源码：[sequence.py](../source/nano-vllm/nanovllm/engine/sequence.py)。
 
+## 本篇在做什么
+
+```mermaid
+flowchart TD
+    A["输入 Token + 采样参数"] --> B["Sequence：Token、长度、缓存进度、block_table"]
+    B --> C["WAITING：等待 Prefill"]
+    C --> D{"本轮能完成剩余 Prefill？"}
+    D -->|否| E["计算一个分块，更新缓存进度"]
+    E --> C
+    D -->|是| F["RUNNING：本轮完成 Prefill，随后逐 Token Decode"]
+    F --> G{"达到 EOS 或生成长度上限？"}
+    G -->|否| F
+    G -->|是| H["FINISHED：释放缓存引用"]
+    F -->|缓存不足，被抢占| I["释放缓存引用，保留已有 Token"]
+    I --> C
+```
+
+**读图说明：** `Sequence` 是一条请求的状态记录，调度器负责改变它的状态。`WAITING / RUNNING / FINISHED` 描述队列生命周期，Prefill / Decode 描述计算阶段，两者并不完全等同：最后一个 Prefill 分块在调度时就会进入 RUNNING。生成出的新 Token 先追加到序列，其 KV 要到下一次前向才写入缓存；被抢占后则用保留的 Token 重新进行 Prefill。
+
 ## sequence.py
 
 在 vLLM 一类推理框架中，一次生成请求通常可以抽象成：

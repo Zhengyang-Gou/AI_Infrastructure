@@ -4,6 +4,27 @@
 
 对应源码：[qwen3.py](../source/nano-vllm/nanovllm/models/qwen3.py)、[layernorm.py](../source/nano-vllm/nanovllm/layers/layernorm.py)、[activation.py](../source/nano-vllm/nanovllm/layers/activation.py)、[rotary_embedding.py](../source/nano-vllm/nanovllm/layers/rotary_embedding.py)。
 
+## 本篇在做什么
+
+```mermaid
+flowchart TD
+    A["Token ID"] --> B["Embedding：映射为隐藏向量"]
+    B --> C["RMSNorm：归一化 Attention 输入"]
+    C --> D["QKV 投影 → Q/K Norm → Q/K RoPE"]
+    P["positions：Token 的绝对位置"] --> D
+    D --> E["Attention：结合历史 KV 计算上下文特征"]
+    E --> F["输出投影 → 残差相加 → RMSNorm"]
+    B -.->|首层残差| F
+    F --> G["MLP：Gate/Up → SiLU 与乘法 → Down"]
+    G --> H["MLP 输出与残差合并：在下一次 RMSNorm 完成"]
+    F -.->|保留残差| H
+    H -->|还有 Decoder 层| C
+    H -->|最后一层| I["最终 RMSNorm → 隐藏状态"]
+    I --> J["compute_logits：LM Head → 词表 logits"]
+```
+
+**读图说明：** 模型负责把 Token 转成可用于预测的隐藏状态：Attention 汇集上下文信息，MLP 对每个位置做特征变换，残差连接保留并累积信息。图中按数学运算关系展示层间循环；源码会把残差加法推迟到下一次 RMSNorm 一起执行。`forward()` 返回隐藏状态，`compute_logits()` 才把它投影成词表分数。
+
 ## qwen3.py
 
 模型结构：

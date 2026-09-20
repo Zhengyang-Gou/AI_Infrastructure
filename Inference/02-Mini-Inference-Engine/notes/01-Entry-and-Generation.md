@@ -4,6 +4,23 @@
 
 对应源码：[example.py](../source/nano-vllm/example.py)、[llm.py](../source/nano-vllm/nanovllm/llm.py)、[config.py](../source/nano-vllm/nanovllm/config.py)、[sampling_params.py](../source/nano-vllm/nanovllm/sampling_params.py)、[llm_engine.py](../source/nano-vllm/nanovllm/engine/llm_engine.py)。
 
+## 本篇在做什么
+
+```mermaid
+flowchart TD
+    A["Prompt + SamplingParams"] --> B["generate：批量提交请求"]
+    B --> C["add_request：编码文本，创建 Sequence"]
+    C --> D["Scheduler：请求进入等待队列"]
+    D --> E["step：调度本轮请求"]
+    E --> F["ModelRunner：前向计算并采样"]
+    F --> G["postprocess：更新请求与缓存状态"]
+    G --> H{"所有请求已完成？"}
+    H -->|否| E
+    H -->|是| I["按请求 ID 排序，解码并返回文本与 Token ID"]
+```
+
+**读图说明：** 这一层负责把一次 `generate()` 调用推进到所有请求完成。文本先被包装成 `Sequence`，随后循环调用 `step()`；每轮只推进选中的请求，最终按提交顺序整理输出。模型配置在引擎初始化时生效，温度和停止条件则随每条请求保存。
+
 ## example.py
 
 ```python

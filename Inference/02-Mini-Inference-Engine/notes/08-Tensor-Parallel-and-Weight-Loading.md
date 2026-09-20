@@ -4,6 +4,25 @@
 
 对应源码：[linear.py](../source/nano-vllm/nanovllm/layers/linear.py)、[embed_head.py](../source/nano-vllm/nanovllm/layers/embed_head.py)、[loader.py](../source/nano-vllm/nanovllm/utils/loader.py)。
 
+## 本篇在做什么
+
+```mermaid
+flowchart TD
+    A["safetensors：原始模型权重"] --> B["Loader：参数名映射，定位合并参数片段"]
+    B --> C["weight_loader：按当前 rank 切片或完整复制"]
+    C -.-> D["各 rank 的局部权重"]
+    X["完整隐藏向量 X，各 rank 相同"] --> E["列并行：切输出维，计算局部 QKV 或 Gate/Up"]
+    D -.-> E
+    E --> F["各 rank：局部 Attention 或门控激活"]
+    F --> G["行并行：用局部输入计算输出贡献"]
+    D -.-> G
+    G --> H["all_reduce 求和：各 rank 得到完整隐藏向量"]
+    H --> I["词表并行 LM Head：各 rank 计算局部 logits"]
+    I --> J["gather 到 rank 0，拼接完整词表后采样"]
+```
+
+**读图说明：** 张量并行把同一层的计算分摊到多个 GPU。列并行产生局部特征，后续行并行对局部贡献求和，恢复各 rank 一致的隐藏向量；LM Head 则把各词表分片的 logits 收集到 rank 0。加载器必须采用与前向一致的切分规则，并把独立保存的 Q/K/V、Gate/Up 装入合并参数的对应区域。输入 Embedding 同样切分词表，查表后通过求和恢复完整向量。
+
 ## linear.py
 
 该文件实现张量并行线性层。PyTorch 线性层的权重形状为：

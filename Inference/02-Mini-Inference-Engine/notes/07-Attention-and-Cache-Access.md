@@ -4,6 +4,27 @@
 
 对应源码：[attention.py](../source/nano-vllm/nanovllm/layers/attention.py)。
 
+## 本篇在做什么
+
+```mermaid
+flowchart TD
+    A["本层新生成的 Q、K、V"] --> B["store_kvcache：按 slot_mapping 写入新 K/V"]
+    C["Context：阶段、槽位、页表、有效长度"] -.-> B
+    B --> D{"执行阶段？"}
+    D -->|Prefill| E{"是否提供 block_tables？"}
+    E -->|否| F["使用本轮 K/V"]
+    E -->|是| G["按页表读取缓存 K/V，包含历史前缀"]
+    F --> H["flash_attn_varlen_func：变长因果注意力"]
+    G --> H
+    D -->|Decode| I["flash_attn_with_kvcache：单 Query 读取有效历史 KV"]
+    C -.-> H
+    C -.-> I
+    H --> J["Attention 输出 → 输出投影"]
+    I --> J
+```
+
+**读图说明：** 这一层先把新 K/V 写到物理缓存，再计算注意力。`slot_mapping` 回答“新 Token 写到哪里”，`block_tables` 回答“历史 Token 从哪里读”，有效长度限制可访问范围。普通 Prefill 可直接使用本轮 K/V；有缓存前缀时要读取分页缓存，Decode 则用单个 Query 访问历史 KV。预热阶段尚未分配缓存，会跳过写入；CUDA Graph 的补齐槽位也不写入。
+
 ## attention.py
 
 ```python

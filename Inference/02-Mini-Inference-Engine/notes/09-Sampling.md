@@ -4,6 +4,20 @@
 
 对应源码：[sampler.py](../source/nano-vllm/nanovllm/layers/sampler.py)。
 
+## 本篇在做什么
+
+```mermaid
+flowchart TD
+    A["logits：每条请求一行词表分数"] --> B["转 FP32，除以该请求的 temperature"]
+    B --> C["softmax：得到词表概率 probs"]
+    D["独立指数噪声：每个候选 Token 一个正数"] --> E["逐元素计算 probs / noise"]
+    C --> E
+    E --> F["沿词表维 argmax：每条请求选一个 Token ID"]
+    F --> G["交给 Scheduler.postprocess 接受或丢弃"]
+```
+
+**读图说明：** 采样器把词表分数转换成下一 Token。温度改变概率分布的集中程度，独立指数噪声让最终选择遵循该分布；这里取最大的是“概率除以随机噪声”，并非直接挑最大概率。每条请求得到一个候选 Token，中间 Prefill 分块的候选会被调度器丢弃，其他有效结果则追加到请求。
+
 ## sampler.py
 
 ```python

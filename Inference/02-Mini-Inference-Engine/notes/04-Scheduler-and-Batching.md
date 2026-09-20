@@ -4,6 +4,30 @@
 
 对应源码：[scheduler.py](../source/nano-vllm/nanovllm/engine/scheduler.py)。
 
+## 本篇在做什么
+
+```mermaid
+flowchart TD
+    A["schedule：开始本轮调度"] --> B["优先检查 waiting：Token 预算、序列数、缓存容量"]
+    B --> C{"选出了 Prefill 请求？"}
+    C -->|是| D["返回 Prefill 批次：必要时切分首条请求"]
+    C -->|否| E["检查 running：为 Decode 准备每条一个 Token"]
+    E --> F{"缓存块够用？"}
+    F -->|否| G["抢占队尾请求；必要时抢占当前请求"]
+    G --> H["释放缓存引用，放回 waiting 等待重算"]
+    H --> E
+    F -->|是| I["返回 Decode 批次"]
+    D --> J["ModelRunner 执行"]
+    I --> J
+    J --> K["postprocess：登记完整块哈希，推进缓存进度"]
+    K --> L{"Prefill 仍未完成？"}
+    L -->|是| A
+    L -->|否| M["追加采样 Token；达到停止条件则释放请求"]
+    M -->|还有请求| A
+```
+
+**读图说明：** 调度器决定“这一轮让谁算、算多少”，并管理缓存容量。本实现一轮只运行 Prefill 或 Decode：只要选出了 Prefill 请求，就直接返回该批次；没有 Prefill 可执行时才选 Decode。中间 Prefill 分块的采样结果不会追加到序列，只有 Prefill 完成或执行 Decode 后才接受新 Token。
+
 ## scheduler.py
 
 一个请求从加入系统到完成，大致经历：

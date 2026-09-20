@@ -4,6 +4,24 @@
 
 对应源码：[block_manager.py](../source/nano-vllm/nanovllm/engine/block_manager.py)。
 
+## 本篇在做什么
+
+```mermaid
+flowchart TD
+    A["Sequence：按逻辑块划分 Token"] --> B["can_allocate：查前缀链哈希并核对 Token"]
+    B --> C{"空闲块是否足够？"}
+    C -->|否| D["暂不接纳请求"]
+    C -->|是| E["allocate：复用命中前缀块，为其余逻辑块分配物理块"]
+    E --> F["block_table：逻辑块 → 物理块 ID"]
+    F --> G["ModelRunner / Attention：定位并读写 GPU KV"]
+    G --> H["hash_blocks：为已计算完整的块登记哈希"]
+    H -.->|后续请求匹配| B
+    F --> I["结束或抢占：deallocate，引用计数减一"]
+    I --> J["引用归零：进入空闲队列，覆盖前仍可复用"]
+```
+
+**读图说明：** `BlockManager` 在 CPU 上管理“哪条请求使用哪些物理块”，K/V 张量本身由 GPU 执行器分配和读写。前缀哈希串联历史块，命中后还要核对块内 Token；本实现不复用请求的最后一个逻辑块，以保留末尾计算。释放引用不会立即擦除 GPU 数据，空闲块被重新分配覆盖前仍可能命中前缀缓存。
+
 ## block_manager.py
 
 `BlockManager` 只管理 KV Cache 的元数据，真正的 K、V 张量由 `ModelRunner` 在 GPU 上分配。

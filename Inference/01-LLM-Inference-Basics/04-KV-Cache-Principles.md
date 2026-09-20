@@ -111,3 +111,7 @@ KV Cache 避免了历史 Token 的重复前向计算，但没有让 Attention �
 ## 总结
 
 KV Cache 是 LLM 高效自回归推理的基础：它让 Decode 每轮只计算一个新 Token，但代价是持续增长的显存占用和读取带宽。对 Serving 系统而言，KV Cache 管理效率直接决定最大并发量、Decode 延迟和显存利用率。
+
+---
+
+[学习目录](README.md) · [上一篇：Prefill 与 Decode](03-Prefill-and-Decode.md) · [下一篇：Sampling Strategies](05-Sampling-Strategies.md)

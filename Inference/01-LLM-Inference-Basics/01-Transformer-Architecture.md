@@ -166,3 +166,7 @@ KV Cache 的元素量近似为：
 ## 总结
 
 从 AI Infra 角度，不仅要知道 Transformer “有什么层”，还要抓住三条主线：**权重决定基础显存与带宽开销，Attention 产生并读取 KV Cache，Prefill 与 Decode 具有不同的性能瓶颈。**
+
+---
+
+[学习目录](README.md) · [下一篇：Attention Mechanism](02-Attention-Mechanism.md)

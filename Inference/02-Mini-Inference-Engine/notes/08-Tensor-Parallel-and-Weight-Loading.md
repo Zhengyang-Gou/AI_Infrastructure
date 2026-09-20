@@ -14,148 +14,168 @@
 ```python
 class ColumnParallelLinear(LinearBase):
     def __init__(...):
+        # PyTorch 权重为 [输出维度, 输入维度]；这里切分输出维。
         super().__init__(
             input_size, output_size // tp_size, bias, 0
         )
 
     def forward(self, x):
+        # 使用完整输入计算本 rank 的局部输出。
         return F.linear(x, self.weight, self.bias)
 ```
-列并行按权重的输出维度切分：
+
+**功能描述：** 按输出特征维度切分线性层，每个 rank 产生部分输出，无需立即通信，适合 QKV 和 Gate/Up 投影。对应 weight_loader 沿权重第 0 维装入当前 rank 的分片。
+
+补充示意：
+
 ```
 完整 W = [W0; W1; ...]
 每个 rank: Yi = X · Wi^T
 ```
-每个 rank 产生不同的输出特征，不需要立即通信，适合 QKV 投影和 MLP 的 Gate/Up 投影。
-
-`weight_loader()` 按 rank 从完整权重的第 0 维截取对应分片。
 
 ```python
 class RowParallelLinear(LinearBase):
     def __init__(...):
+        # 仅保留本 rank 对应的输入维权重分片。
         super().__init__(
             input_size // tp_size, output_size, bias, 1
         )
 
     def forward(self, x):
+        # 输入 x 已是当前 rank 的局部特征。
         y = F.linear(
             x, self.weight,
+            # 仅 rank 0 加 Bias，避免求和时重复累加。
             self.bias if self.tp_rank == 0 else None,
         )
         if self.tp_size > 1:
+            # 跨 rank 求和，各 rank 都获得完整输出。
             dist.all_reduce(y)
         return y
 ```
-行并行按输入维度切分：
+
+**功能描述：** 按输入特征维度切分线性层，各 rank 先计算局部贡献，再求和得到完整输出，适合 Attention 输出投影和 MLP 降维。
+
+补充示意：
+
 ```
 X = [X0, X1, ...]
 W = [W0, W1, ...]
 Y = Σ Xi · Wi^T
 ```
-每个 rank 先计算部分结果，再 All-Reduce 求和。Bias 只在 rank 0 添加一次，随后求和即可广播到最终结果。
 
-`MergedColumnParallelLinear` 把多个输出矩阵合并到一个参数中。加载时先根据 `loaded_shard_id` 找到合并参数内部的区域，再取该区域属于当前 TP rank 的分片。
-
-`QKVParallelLinear` 与之类似，但 Q Head 数和 KV Head 数可能不同，因此分别计算 Q、K、V 在当前 rank 中的大小和偏移。
-
-`ReplicatedLinear` 不切分权重，各 rank 各自保存完整副本；当前 Qwen3 主干主要使用列并行和行并行层。
+同文件中的其他线性层扩展了这套切分规则：`MergedColumnParallelLinear` 根据 `loaded_shard_id` 定位合并参数内部区域，再装入当前 rank 的分片；`QKVParallelLinear` 分别计算 Q/K/V 的大小与偏移，以适应不同的 Q Head 和 KV Head 数。`ReplicatedLinear` 则在各 rank 保存完整权重副本。
 
 ## embed_head.py
 
 ```python
 class VocabParallelEmbedding(nn.Module):
     def __init__(self, num_embeddings, embedding_dim):
+        # 每个 rank 的局部词表大小。
         self.num_embeddings_per_partition = (
             num_embeddings // self.tp_size
         )
+        # 本 rank 的全局词表起点。
         self.vocab_start_idx = (
             self.num_embeddings_per_partition * self.tp_rank
         )
+        # 区间右端点，不包含此索引。
         self.vocab_end_idx = (
             self.vocab_start_idx
             + self.num_embeddings_per_partition
         )
 ```
-Embedding 按词表维度切分，每个 rank 只保存连续的一段词表。
+
+**功能描述：** 按连续词表区间分配 Embedding 权重，使每个 rank 只保存一部分 Token 的向量。
 
 ```python
 if self.tp_size > 1:
+    # 标记哪些 Token 属于当前 rank 的词表区间。
     mask = (
         (x >= self.vocab_start_idx)
         & (x < self.vocab_end_idx)
     )
+    # 区间内转换为局部下标，区间外临时映射到 0。
     x = mask * (x - self.vocab_start_idx)
+# 查询局部 Embedding 权重。
 y = F.embedding(x, self.weight)
 if self.tp_size > 1:
+    # 清除区间外 Token 的临时查表结果。
     y = mask.unsqueeze(1) * y
+    # 只有所属 rank 的向量有效，求和后恢复完整输出。
     dist.all_reduce(y)
 ```
-每个 Token 只会落在一个 rank 的词表区间：
 
-1. 本 rank 范围内的 Token 转为局部下标
-2. 范围外 Token 临时映射到 0，查表后再用 Mask 清零
-3. All-Reduce 后，每个位置只剩下真正所属 rank 的 Embedding
+**功能描述：** 将全局 Token ID 转成本地词表索引并查表，屏蔽不属于本 rank 的结果，再跨 rank 合并成完整 Embedding。
 
 ```python
 class ParallelLMHead(VocabParallelEmbedding):
     def forward(self, x):
+        # 读取当前阶段及变长序列边界。
         context = get_context()
         if context.is_prefill:
+            # 累计边界减 1，得到每条序列最后一个 Query 的位置。
             last_indices = context.cu_seqlens_q[1:] - 1
+            # 跳过不用于本轮采样的其他隐藏状态。
             x = x[last_indices].contiguous()
+        # 用局部词表权重计算分片 logits。
         logits = F.linear(x, self.weight)
 ```
-Prefill 会得到所有输入 Token 的隐藏状态，但生成下一个 Token 只需要每条序列最后一个位置，所以通过累计长度取出各序列末尾，避免为所有 Prompt Token 计算词表 logits。
 
-每个 rank 先计算自己的局部词表 logits，之后将结果 Gather 到 rank 0，并沿词表维拼接成完整 logits。只有 rank 0 需要完整词表，因为最终采样也只在那里执行。
+**功能描述：** 把隐藏状态投影到当前 rank 的词表分片。Prefill 仅为各序列本轮末尾位置计算 logits；完整实现随后将分片 Gather 到 rank 0，拼成完整词表供采样。
 
 ## loader.py
 
 ```python
 def load_model(model: nn.Module, path: str):
+    # 读取模型声明的合并参数映射，没有则用空字典。
     packed_modules_mapping = getattr(
         model, "packed_modules_mapping", {}
     )
+    # 遍历模型目录内的权重分片文件。
     for file in glob(os.path.join(path, "*.safetensors")):
+        # 以 CPU 为读取目标，后续按需取得单个 Tensor。
         with safe_open(file, "pt", "cpu") as f:
+            # 逐个参数选择合适的装载方式。
             for weight_name in f.keys():
                 ...
 ```
-逐个打开模型目录中的 safetensors 文件，并将权重先映射到 CPU。`safe_open` 按需读取单个 Tensor，不需要一次把所有权重文件完整载入内存。
+
+**功能描述：** 遍历本地 safetensors 权重文件和参数名，为逐参数加载提供入口，避免一次性把所有权重文件完整载入内存。
 
 ```python
 for k in packed_modules_mapping:
+    # 检查该原始参数是否属于合并投影。
     if k in weight_name:
+        # 取得目标合并参数名及内部片段标识。
         v, shard_id = packed_modules_mapping[k]
+        # 将原始名称转换成推理模型中的名称。
         param_name = weight_name.replace(k, v)
         param = model.get_parameter(param_name)
+        # 读取绑定在目标参数上的专用加载函数。
         weight_loader = getattr(param, "weight_loader")
         weight_loader(
+            # 传入原始 Tensor 和片段 ID，由 Loader 定位和切分。
             param, f.get_tensor(weight_name), shard_id
         )
         break
 ```
-对于 Q/K/V 和 Gate/Up 等合并权重：
 
-1. 把 Hugging Face 参数名替换为推理模型中的合并参数名
-2. 取得目标参数上绑定的专用 `weight_loader`
-3. 传入 `shard_id`，让 Loader 知道它属于合并参数的哪一段
-4. 专用 Loader 同时完成“合并位置选择”和“张量并行 rank 切分”
+**功能描述：** 将独立保存的原始投影权重装入合并参数的正确区域，并由参数专用 Loader 完成当前张量并行 rank 的切片。
 
 ```python
 else:
+    # 直接按原权重名寻找模型参数。
     param = model.get_parameter(weight_name)
+    # 并行层有专用 Loader，RMSNorm 等可用默认完整复制。
     weight_loader = getattr(
         param, "weight_loader", default_weight_loader
     )
+    # 读取当前 Tensor，并装入对应参数。
     weight_loader(param, f.get_tensor(weight_name))
 ```
-普通权重优先调用参数自己的 Loader：
 
-- 并行 Linear、Embedding 使用专用 Loader，只复制当前 rank 的权重分片
-- RMSNorm 等未绑定专用 Loader 的参数使用 `default_weight_loader`，复制完整权重
-
-将加载逻辑绑定在参数本身，而不是在总 Loader 中硬编码所有层类型，使新增并行层时只需定义该参数应如何切分。
+**功能描述：** 处理不属于合并映射的普通参数：优先使用参数自身的加载规则，否则完整复制权重，让新增层可以自行定义切分方式。
 
 ---
 

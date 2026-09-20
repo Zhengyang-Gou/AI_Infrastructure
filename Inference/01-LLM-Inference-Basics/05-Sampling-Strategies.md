@@ -229,3 +229,7 @@ Greedy 可直接 `argmax`，也能跳过不影响 argmax 的过滤器，因此�
 ## 总结
 
 Sampling 的核心是两步：**先加工并裁剪 logits，再决定选最大值还是按概率随机抽样。** Greedy 强调确定性，Temperature 控制分布形状，Top-k、Top-p 和 Min-p 控制候选集合，Penalty 与 Grammar 则注入历史和业务约束。对 Serving 系统而言，还要同时考虑随机数、全词表处理、logprobs、并行候选及 KV Cache 带来的性能代价。
+
+---
+
+[学习目录](README.md) · [上一篇：KV Cache 原理](04-KV-Cache-Principles.md) · [下一篇：LLM 推理流程与性能指标](06-LLM-Inference-Metrics.md)

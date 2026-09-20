@@ -1,6 +1,6 @@
 # LLM 推理基础
 
-建议时间：**2 周**。阶段目标：**能解释一次生成请求如何执行**。已有笔记按以下顺序阅读。
+阶段目标：**能解释一次生成请求如何执行**,已有笔记按以下顺序阅读。
 
 1. [Transformer 架构](01-Transformer-Architecture.md)
 2. [Attention Mechanism](02-Attention-Mechanism.md)

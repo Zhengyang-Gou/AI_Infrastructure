@@ -29,79 +29,83 @@ FINISHED
 ```python
 class Scheduler:
     def __init__(self, config: Config):
+        # 每轮序列数量上限。
         self.max_num_seqs = config.max_num_seqs
+        # Prefill 每轮可用的 Token 预算。
         self.max_num_batched_tokens = config.max_num_batched_tokens
+        # 生成此 Token 时可触发请求结束。
         self.eos = config.eos
         self.block_size = config.kvcache_block_size
+        # 集中管理缓存容量、分配与前缀复用。
         self.block_manager = BlockManager(
             config.num_kvcache_blocks,
             config.kvcache_block_size,
         )
+        # 保存新请求、未完成 Prefill 和被抢占的请求。
         self.waiting: deque[Sequence] = deque()
+        # 保存已可继续 Decode 的请求。
         self.running: deque[Sequence] = deque()
 ```
-构造一个调度器，初始化参数：
 
-- 最大并发序列数量：表示一个 batch 最多可以包含多少条序列
-- 最大 batch token 数量：表示一次模型执行最多处理多少个 token
-- EOS token：eos 是 End Of Sequence token ID
-- KV Cache block 大小：KV Cache 不是逐 token 分配，而是以 block 为单位管理
-- 创建 BlockManager：传入 KV Cache block 总数量以及每个 block 可以容纳的 token 数
-- 等待队列：保存尚未完成 Prefill，或者被抢占后需要重新进入 Prefill 的请求
-- 运行队列：保存已经完成 Prompt Prefill、可以执行 Decode 的请求
+**功能描述：** 创建受序列数和 Token 预算约束的调度器，并维护等待、运行两个队列及共享的缓存块管理器。
 
 ```python
     def is_finished(self):
+        # 等待队列与运行队列必须同时为空。
         return not self.waiting and not self.running
 ```
-判断所有请求是否已经处理完毕
 
-不是检查某一条序列是否完成，而是检查整个调度器中是否已经没有待处理请求
+**功能描述：** 判断整个调度器是否已无待处理请求，供引擎结束批量生成循环。
 
 ```python
     def add(self, seq: Sequence):
+        # 常规新请求按入队顺序等待。
         self.waiting.append(seq)
 ```
-把一个新请求添加到等待队列末尾
 
-因为使用 append()，所以整体上采用 FIFO
+**功能描述：** 将新请求放到等待队列末尾，使其进入后续 Prefill 调度。
 
 ```python
     def schedule(self) -> tuple[list[Sequence], bool]:
+        # 存储本轮选中的请求。
         scheduled_seqs = []
+        # 累计本轮已分配的 Token 预算。
         num_batched_tokens = 0
 ```
-返回值是：scheduled_seqs, is_prefill
 
-整体策略是：
-1. 先尝试调度 Prefill
-2. 只要调度到了任何 Prefill 请求，就立即返回
-3. 如果没有 Prefill 可执行，再调度 Decode
-
-初始化本轮状态:
-1. scheduled_seqs 保存本轮选中的请求
-2. num_batched_tokens 保存本轮已经安排的 token 总数
+**功能描述：** 初始化一轮调度的结果与 Token 计数。后续先尝试 Prefill，若未选中请求再尝试 Decode，最终返回请求列表和阶段标记。
 
 ```python
 while self.waiting and len(scheduled_seqs) < self.max_num_seqs:
+    # 查看队首，不提前移除尚未完成 Prefill 的请求。
     seq = self.waiting[0]
+    # 扣除已调度 Token，计算剩余预算。
     remaining = self.max_num_batched_tokens - num_batched_tokens
+    # 扣除已调度 Token，计算剩余预算。
     if remaining == 0:
         break
     if not seq.block_table:
+        # 首次进入时检查缓存容量和可复用前缀。
         num_cached_blocks = self.block_manager.can_allocate(seq)
+        # 首次进入时检查缓存容量和可复用前缀。
         if num_cached_blocks == -1:
             break
         num_tokens = seq.num_tokens - num_cached_blocks * self.block_size
     else:
+        # 分块 Prefill 只继续处理尚未缓存的部分。
         num_tokens = seq.num_tokens - seq.num_cached_tokens
-    # Only allow chunked prefill for the first sequence.
+    # 仅允许本批次第一条序列执行分块 Prefill。
+    # 只有本批次首条序列允许部分 Prefill。
     if remaining < num_tokens and scheduled_seqs:
         break
     if not seq.block_table:
+        # 首次调度时建立页表。
         self.block_manager.allocate(seq, num_cached_blocks)
+    # 本轮执行量不超过剩余预算。
     seq.num_scheduled_tokens = min(num_tokens, remaining)
     num_batched_tokens += seq.num_scheduled_tokens
+    # 本轮执行量不超过剩余预算。
+    # 本轮可补齐所有输入，后续就能进入 Decode。
     if seq.num_cached_tokens + seq.num_scheduled_tokens == seq.num_tokens:
         seq.status = SequenceStatus.RUNNING
         self.waiting.popleft()
@@ -109,79 +113,55 @@ while self.waiting and len(scheduled_seqs) < self.max_num_seqs:
     scheduled_seqs.append(seq)
 
 if scheduled_seqs:
+    # True 告诉执行器和后处理逻辑本轮是 Prefill。
     return scheduled_seqs, True
 ```
-调度 Prefill 阶段的请求：
 
-1. 只要等待队列不为空，并且本轮序列数量没有超过 `max_num_seqs`，就不断尝试加入请求
-2. 每次只查看等待队列头部的序列，保证等待队列整体遵循 FIFO
-3. `remaining` 表示本轮 Batch 还能容纳多少个 token；如果已经没有剩余容量，就结束本轮调度
-4. 如果序列还没有 `block_table`，说明尚未分配 KV Cache：
-    - 调用 `can_allocate(seq)` 检查是否有足够的物理块
-    - 返回 `-1` 表示当前无法分配，停止继续调度
-    - 否则用序列总 token 数减去可复用缓存块中的 token 数，得到本次真正需要计算的 token 数
-5. 如果序列已经有 `block_table`，说明它可能执行过部分 Prefill，本次只处理尚未缓存的 token
-6. 只有本轮第一条序列允许 Chunked Prefill；如果当前序列无法完整放入 Batch，并且前面已经选中了其他序列，就留到下一轮处理
-7. 为首次进入的序列分配 KV Cache，并记录本轮实际调度的 token 数
-8. 当 `已缓存 token 数 + 本轮调度 token 数` 等于序列总 token 数时，说明本轮可以完成 Prefill：
-    - 将状态改为 `RUNNING`
-    - 从 `waiting` 队列移除
-    - 加入 `running` 队列，等待后续 Decode
-9. 只要本轮选中了 Prefill 请求，就返回 `(scheduled_seqs, True)`，本轮不再混合执行 Decode
-
-这里的 `True` 表示本轮是 Prefill，`ModelRunner` 和后处理逻辑会据此选择对应的执行方式。
+**功能描述：** 在资源约束内组成 Prefill 批次，复用已缓存前缀并支持首条请求分块执行。能在本轮完成 Prefill 的请求转入运行队列；本轮一旦选中 Prefill，就不混合 Decode。
 
 ```python
 while self.running and len(scheduled_seqs) < self.max_num_seqs:
+    # 优先选取运行队列头部。
     seq = self.running.popleft()
+    # 检查当前末尾 Token 是否需要额外缓存块。
     while not self.block_manager.can_append(seq):
         if self.running:
+            # 优先释放队尾其他请求的缓存。
             self.preempt(self.running.pop())
+        # 对应 while：仅未通过 break 退出时执行。
         else:
+            # 无其他请求可抢占时，将当前请求也退回等待队列。
             self.preempt(seq)
             break
+    # 对应 while：仅未通过 break 退出时执行。
     else:
+        # Decode 每条序列只计算一个输入 Token。
         seq.num_scheduled_tokens = 1
         seq.is_prefill = False
         self.block_manager.may_append(seq)
         scheduled_seqs.append(seq)
 assert scheduled_seqs
+# 反转后从左侧插入，保持原有请求顺序。
 self.running.extendleft(reversed(scheduled_seqs))
+# False 表示 Decode。
 return scheduled_seqs, False
 ```
-调度 Decode 阶段的请求：
 
-1. 当本轮没有可执行的 Prefill 时，从 `running` 队列头部依次选择序列
-2. Decode 每轮只为每条序列生成一个新 token，因此成功调度后将 `num_scheduled_tokens` 设置为 `1`
-3. `can_append(seq)` 检查当前序列的 KV Cache 是否还能容纳下一个 token
-4. 如果空间不足，就进行抢占：
-    - 还有其他运行序列时，优先抢占队尾的序列，为当前序列释放 KV Cache
-    - 已经没有其他序列可抢占时，只能抢占当前序列，并停止调度它
-5. Python 的 `while...else` 表示只有循环没有通过 `break` 退出时才执行 `else`：
-    - 将序列切换到 Decode 状态
-    - 必要时为下一个 token 扩展 KV Cache
-    - 把序列加入本轮执行列表
-6. `assert scheduled_seqs` 确保 Decode 阶段至少成功调度了一条序列
-7. `extendleft(reversed(...))` 把已调度序列按原顺序放回 `running` 队列头部，使它们下一轮仍能继续 Decode
-8. 返回 `(scheduled_seqs, False)`，其中 `False` 表示本轮是 Decode
-
-这一段通过“释放低优先级序列的缓存，让当前序列继续运行”来应对 KV Cache 空间不足。
+**功能描述：** 在没有可执行 Prefill 时组成 Decode 批次，每条请求处理一个 Token。缓存不足时抢占队尾请求释放空间，确保当前请求有机会继续推进。
 
 ```python
     def preempt(self, seq: Sequence):
+        # 重新等待调度。
         seq.status = SequenceStatus.WAITING
+        # 恢复时需要重新构建 KV Cache。
         seq.is_prefill = True
+        # 解除页表引用，不删除序列 Token。
         self.block_manager.deallocate(seq)
+        # 放到等待队列头部，优先安排恢复。
         self.waiting.appendleft(seq)
 ```
-`preempt`：抢占一条正在运行的序列
 
-1. 把序列状态从 `RUNNING` 改回 `WAITING`
-2. 将 `is_prefill` 重新设置为 `True`，因为它恢复执行时需要重新构建已经释放的 KV Cache
-3. 调用 `deallocate(seq)` 释放该序列占用的全部物理缓存块
-4. 使用 `appendleft()` 把序列放到等待队列头部，使它能够优先重新调度
-
-抢占不会删除序列的 token 数据，只会释放它的 KV Cache 映射。因此请求不会丢失，但恢复时会产生重新计算 Prefill 的开销。
+**功能描述：** 将运行请求退回等待状态并释放其缓存，保留 Token 历史供恢复时重建 KV。这样可以缓解显存压力，但会引入重新 Prefill 的计算开销。
 
 ```python
     def postprocess(
@@ -190,51 +170,32 @@ return scheduled_seqs, False
         token_ids: list[int],
         is_prefill: bool,
     ):
+        # 按本轮批次顺序配对模型输出。
         for seq, token_id in zip(seqs, token_ids):
+            # 先根据本轮执行范围登记新填满的块。
             self.block_manager.hash_blocks(seq)
+            # 累计已计算 Token，并清零本轮计划。
             seq.num_cached_tokens += seq.num_scheduled_tokens
             seq.num_scheduled_tokens = 0
+            # Prompt 尚未全部处理时，丢弃中间采样结果。
             if is_prefill and seq.num_cached_tokens < seq.num_tokens:
                 continue
+            # Prefill 完成或 Decode 时才接收生成结果。
             seq.append_token(token_id)
+            # 只有未忽略 EOS 时才按结束符停止。
             reached_eos = not seq.ignore_eos and token_id == self.eos
+            # 生成部分达到请求的长度上限。
             reached_limit = (
                 seq.num_completion_tokens == seq.max_tokens
             )
+            # 结束请求，归还缓存并从运行队列移除。
             if reached_eos or reached_limit:
                 seq.status = SequenceStatus.FINISHED
                 self.block_manager.deallocate(seq)
                 self.running.remove(seq)
 ```
-`postprocess`：根据模型输出更新序列和调度器状态
 
-参数：
-
-- `seqs`：本轮参与执行的序列
-- `token_ids`：模型为各序列返回的 token ID
-- `is_prefill`：本轮是否处于 Prefill 阶段
-
-处理流程：
-
-1. 使用 `zip(seqs, token_ids)` 将每条序列与对应的模型输出配对
-2. `hash_blocks(seq)` 为已经填满的 KV Cache 块计算哈希，使相同前缀后续可以复用缓存
-3. 把本轮调度的 token 数累加到 `num_cached_tokens`，然后清空 `num_scheduled_tokens`
-4. 如果当前是 Chunked Prefill，并且仍有输入 token 没有写入缓存，就直接处理下一条序列：
-    - 此时返回的 `token_id` 不作为生成结果
-    - 当前序列会在后续轮次继续 Prefill
-5. Prefill 完成或当前处于 Decode 时，将模型输出追加到序列：
-    - 更新 `token_ids`
-    - 更新 `last_token`
-    - 增加 `num_tokens`
-6. 判断请求是否应该结束：
-    - 未设置 `ignore_eos`，并且模型生成了 EOS
-    - 已生成的 token 数达到 `max_tokens`
-7. 请求结束后：
-    - 将状态设置为 `FINISHED`
-    - 释放该序列占用的 KV Cache
-    - 从 `running` 队列中移除
-
-`postprocess` 完成了“模型输出 → 序列状态 → 缓存状态 → 调度队列”的同步，是每轮推理结束后的收尾步骤。
+**功能描述：** 将模型输出同步到序列、缓存和调度队列。未完成的 Chunked Prefill 只更新缓存进度，其余请求追加生成 Token，并在达到停止条件时释放资源。
 
 ---
 

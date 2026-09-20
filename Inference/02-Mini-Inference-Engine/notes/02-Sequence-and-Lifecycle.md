@@ -22,25 +22,25 @@ Sequence 就是这个请求在推理系统中的状态载体
 
 ```python
 class SequenceStatus(Enum):
+    # 等待 Prefill 或抢占后重算；auto 自动分配枚举值。
     WAITING = auto()
+    # 已进入运行队列。
     RUNNING = auto()
+    # 达到结束条件。
     FINISHED = auto()
 ```
-序列状态，三个状态分别表示：
-- WAITING：等待调度
-- RUNNING：正在执行推理
-- FINISHED：生成结束
 
-auto() 会自动为枚举成员分配值，业务代码不需要关心具体数字
+**功能描述：** 定义请求生命周期的三种状态，供调度器决定请求是否等待、运行或结束。
 
 ```python
 class Sequence:
+    # 默认每块 256 个 Token，由引擎配置统一设置。
     block_size = 256
+    # 每次 next 都产生一个新的递增序列 ID。
     counter = count()
 ```
-每个逻辑缓存块容纳 256 个 token
 
-itertools.count() 会不断产生递增整数，每创建一个 Sequence，就会获得唯一的序列 ID
+**功能描述：** 设置序列共享的分块单位和 ID 生成器，使每条请求拥有可追踪的身份。
 
 ```python
     def __init__(
@@ -48,107 +48,110 @@ itertools.count() 会不断产生递增整数，每创建一个 Sequence，就�
         token_ids: list[int],
         sampling_params=SamplingParams(),
     ):
+        # 分配唯一 ID，并从等待状态开始。
         self.seq_id = next(Sequence.counter)
         self.status = SequenceStatus.WAITING
+        # 复制 Token 列表，避免直接修改调用方的输入。
         self.token_ids = copy(token_ids)
+        # 保存当前最后一个 Token，Decode 时用作模型输入。
         self.last_token = token_ids[-1]
+        # 当前总长度包含 Prompt 和已生成部分。
         self.num_tokens = len(self.token_ids)
+        # 固定的原始 Prompt 长度。
         self.num_prompt_tokens = len(token_ids)
+        # 已经有 KV Cache 的 Token 数。
         self.num_cached_tokens = 0
+        # 本轮准备计算的 Token 数。
         self.num_scheduled_tokens = 0
+        # 新请求先执行 Prefill。
         self.is_prefill = True
+        # 逻辑块编号到物理 KV Cache 块编号的映射。
         self.block_table = []
+        # 保存请求独立的温度、生成长度上限和 EOS 策略。
         self.temperature = sampling_params.temperature
         self.max_tokens = sampling_params.max_tokens
         self.ignore_eos = sampling_params.ignore_eos
 ```
-1. 新序列拥有唯一 ID，初始状态为等待调度
-2. token_ids：当前序列中的所有 token
-3. last_token：最后一个 token
-4. num_tokens：当前 token 总数
-5. num_prompt_tokens：原始提示词 token 数
-6. num_cached_tokens：已有 KV Cache 的 token 数量
-7. num_scheduled_tokens：本轮被调度执行的 token 数量
-8. is_prefill：是否仍处于 Prefill 阶段
-9. block_table：逻辑块到物理 KV Cache 块的映射表
-10. temperature：控制采样随机性
-11. max_tokens：最大生成 token 数
-12. ignore_eos：是否忽略结束符 EOS
+
+**功能描述：** 从输入 Token 和采样参数创建请求状态，后续调度、缓存管理与输出收集都围绕此对象更新。
 
 ```python
     def __len__(self):
+        # 返回当前序列总长度。
         return self.num_tokens
 
     def __getitem__(self, key):
+        # 支持单个下标或切片访问。
         return self.token_ids[key]
 ```
-Python 容器协议
 
-支持 len(seq), 支持下标访问, seq[0]
+**功能描述：** 为请求对象提供长度查询和 Token 下标访问，让调度与分块代码可以直接使用 len(seq) 和 seq[key]。
 
 ```python
     @property
     def is_finished(self):
+        # 根据枚举状态判断是否结束。
         return self.status == SequenceStatus.FINISHED
 
     @property
     def num_completion_tokens(self):
+        # 总长度减去 Prompt 长度，得到生成长度。
         return self.num_tokens - self.num_prompt_tokens
 
     @property
     def prompt_token_ids(self):
+        # 截取原始 Prompt。
         return self.token_ids[:self.num_prompt_tokens]
 
     @property
     def completion_token_ids(self):
+        # 截取模型生成部分。
         return self.token_ids[self.num_prompt_tokens:]
 ```
-常用属性：
 
-- 是否结束
-- 已生成 token 数量
-- Prompt token：返回原始输入部分
-- Completion token：返回模型后续生成部分
+**功能描述：** 提供完成状态、生成长度和输入/输出 Token 的统一查询接口，避免调用方重复计算边界。
 
 ```python
     @property
     def num_blocks(self):
+        # 向上取整：不足一整块也要占用一个块。
         return (self.num_tokens + self.block_size - 1) // self.block_size
 
     @property
     def last_block_num_tokens(self):
+        # 减去前面完整块的容量，得到末块实际长度。
         return self.num_tokens - (self.num_blocks - 1) * self.block_size
 
     def block(self, i):
+        # 检查逻辑块下标有效。
         assert 0 <= i < self.num_blocks
+        # 按块大小截取该逻辑块的 Token。
         return self.token_ids[
             i * self.block_size : (i + 1) * self.block_size
         ]
 ```
-KV Cache 分块计算：
 
-- 当前需要多少个块
-- 最后一个块有多少 token
-- 获取第 i 个逻辑块
+**功能描述：** 将 Token 序列转换成逻辑块视图，供缓存分配和前缀匹配计算所需块数及各块内容。
 
 ```python
     def append_token(self, token_id: int):
+        # 将新结果追加到现有序列。
         self.token_ids.append(token_id)
+        # 供下一轮 Decode 直接读取。
         self.last_token = token_id
+        # 保持长度与列表内容同步。
         self.num_tokens += 1
 ```
-添加生成 token：
 
-- Decode 阶段每生成一个 token，就可以调用：
-    - 将 token 加入列表
-    - 更新最后一个 token
-    - 增加 token 总数
+**功能描述：** 接收一个新生成的 Token，并同步序列内容、最后一个 Token 和总长度。
 
 ```python
     def __getstate__(self):
+        # 根据执行阶段选择完整列表或单个最新 Token。
         last_state = (
             self.last_token if not self.is_prefill else self.token_ids
         )
+        # 同时传递长度、缓存进度和页表等执行元数据。
         return (
             self.num_tokens,
             self.num_prompt_tokens,
@@ -158,11 +161,8 @@ KV Cache 分块计算：
             last_state,
         )
 ```
-自定义序列化：
 
-- 导出状态：针对两个阶段做了优化
-    - Prefill 阶段：Prefill 需要处理完整 Prompt，因此发送所有 token
-    - Decode 阶段：Decode 每轮通常只需要最新 token，所以不再发送完整 token 列表，可以减少进程间通信数据量
+**功能描述：** 生成跨进程传输所需的精简状态：Prefill 传递完整 Token 列表，Decode 只传递最新 Token，减少逐步生成时的通信量。
 
 ```python
     def __setstate__(self, state):
@@ -173,18 +173,19 @@ KV Cache 分块计算：
             self.num_scheduled_tokens,
             self.block_table,
             last_state,
+        # 按序列化时约定的顺序解包。
         ) = state
+        # 列表表示 Prefill，可据此读取本轮输入切片。
         if isinstance(last_state, list):
             self.token_ids = last_state
             self.last_token = self.token_ids[-1]
         else:
+            # Decode 不传历史列表，只保存最新 Token。
             self.token_ids = []
             self.last_token = last_state
 ```
-恢复状态：判断最后一个字段的类型
 
-- 收到列表：表示这是 Prefill 数据
-- 收到整数：表示这是 Decode 数据
+**功能描述：** 在工作进程中恢复模型执行所需的序列字段，与序列化格式配对使用。恢复对象只保留执行需要的状态。
 
 ---
 

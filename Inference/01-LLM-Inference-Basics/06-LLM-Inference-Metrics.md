@@ -264,3 +264,7 @@ MFU = (模型有效 FLOPs / 测量耗时) / GPU 理论峰值 FLOPs/s
 ## 总结
 
 评估 LLM 推理系统时，应以 **TTFT、TPOT、P99、Throughput 和 Goodput** 为核心，再结合 KV Cache、GPU 与调度指标定位原因。最有意义的结论不是“峰值 Tokens/s 最高”，而是“在指定负载和 SLO 下，有效吞吐与成本最优”。
+
+---
+
+[学习目录](README.md) · [上一篇：Sampling Strategies](05-Sampling-Strategies.md) · [下一阶段：Mini Inference Engine](../02-Mini-Inference-Engine/README.md)

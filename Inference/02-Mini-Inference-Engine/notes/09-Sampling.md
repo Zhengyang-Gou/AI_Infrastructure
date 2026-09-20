@@ -7,22 +7,18 @@
 ## sampler.py
 
 ```python
+# 转为 FP32，按每条序列的温度缩放整行词表 logits。
 logits = logits.float().div_(temperatures.unsqueeze(1))
+# 沿词表维归一化为概率。
 probs = torch.softmax(logits, dim=-1)
+# 比较 概率 / 指数噪声，最大者作为采样结果。
 sample_tokens = probs.div_(
+    # 每个候选 Token 独立生成指数噪声，并限制最小值。
     torch.empty_like(probs).exponential_(1).clamp_min_(1e-10)
 ).argmax(dim=-1)
 ```
-采样流程：
 
-1. logits 转为 FP32，并为 Batch 中每条序列除以各自温度
-2. Softmax 得到概率
-3. 为每个候选 Token 生成独立的指数分布随机数
-4. 取 `probability / exponential_noise` 最大的位置
-
-最后两步属于指数竞赛（Exponential Race），与按分类分布进行 multinomial 采样等价，适合用逐元素操作和 `argmax` 实现。`@torch.compile` 可将这些操作编译优化。
-
-温度越低，原 logits 差距被放大，输出更确定；温度越高，概率分布更平坦。项目在 `SamplingParams` 中禁止温度为 0，所以没有单独实现 Greedy Sampling。
+**功能描述：** 将每条请求的 logits 转为温度控制的概率分布，再通过指数竞赛选出下一个 Token。理想情况下该方法等价于分类分布采样；实现用极小值截断避免除零。源码通过 `@torch.compile` 优化这些运算。温度越低分布通常越集中，该项目不支持零温度贪心采样。
 
 ---
 

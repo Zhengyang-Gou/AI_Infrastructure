@@ -177,3 +177,7 @@ KV Cache 保存历史 Token 已经计算好的 K、V，使 Decode 不必每一�
 ## 总结
 
 Attention 可以压缩为三步：**QKᵀ 计算相关性、Softmax 生成权重、权重乘 V 聚合信息。** 对推理系统而言，Prefill 的核心问题是长序列下的二次计算和显存访问，Decode 的核心问题则是持续读取不断增长的 KV Cache。
+
+---
+
+[学习目录](README.md) · [上一篇：Transformer 架构](01-Transformer-Architecture.md) · [下一篇：Prefill 与 Decode](03-Prefill-and-Decode.md)

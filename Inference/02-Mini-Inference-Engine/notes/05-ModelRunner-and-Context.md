@@ -9,23 +9,25 @@
 ```python
 @dataclass(slots=True)
 class Context:
+    # 标记当前执行阶段。
     is_prefill: bool = False
+    # 扁平 Query 数组中各序列的累计边界。
     cu_seqlens_q: torch.Tensor | None = None
+    # 各序列有效 Key 长度的累计边界，含缓存前缀。
     cu_seqlens_k: torch.Tensor | None = None
+    # 本批次最大的 Query 长度。
     max_seqlen_q: int = 0
+    # 本批次最大的 Key 长度。
     max_seqlen_k: int = 0
+    # 本轮 Token 写入 KV Cache 的物理槽位。
     slot_mapping: torch.Tensor | None = None
+    # Decode 中每条序列的有效上下文长度。
     context_lens: torch.Tensor | None = None
+    # 逻辑块到物理块的映射，Decode 或缓存前缀 Prefill 使用。
     block_tables: torch.Tensor | None = None
 ```
-`Context` 是 `ModelRunner` 与每一层 `Attention` 之间的本轮推理元数据：
 
-- Prefill 使用 `cu_seqlens_q/k` 和最大序列长度调用变长 FlashAttention
-- Prefill、Decode 都使用 `slot_mapping` 写入 KV Cache
-- Decode 使用 `context_lens` 和 `block_tables` 读取分页缓存
-- 前缀缓存 Prefill 也会使用 `block_tables`
-
-模块级 `_CONTEXT` 相当于一次前向期间的全局上下文。`set_context()` 在前向前设置，模型各层通过 `get_context()` 读取，`reset_context()` 在前向后清空。这样无需把大量缓存元数据逐层写进 `forward` 参数。
+**功能描述：** 保存一次前向所需的批量元数据，连接 ModelRunner 与各层 Attention。执行前通过 set_context 设置，各层通过 get_context 读取，结束后 reset_context 清空，避免逐层传递大量参数。
 
 ## model_runner.py
 
@@ -40,154 +42,172 @@ class Context:
 ```python
 def __init__(self, config, rank, event):
     ...
+    # 建立 NCCL 通信组，每个 rank 对应一张 GPU。
     dist.init_process_group(
         "nccl", "tcp://localhost:2333",
         world_size=self.world_size, rank=rank,
     )
     torch.cuda.set_device(rank)
+    # 保存原默认类型，再按模型配置创建 CUDA 参数。
     default_dtype = torch.get_default_dtype()
     torch.set_default_dtype(hf_config.dtype)
     torch.set_default_device("cuda")
     self.model = Qwen3ForCausalLM(hf_config)
+    # 加载当前 rank 所需的权重分片。
     load_model(self.model, config.model)
     self.sampler = Sampler()
+    # 先预热并测量峰值显存，再分配 KV Cache。
     self.warmup_model()
     self.allocate_kv_cache()
+    # 启用图模式时预先捕获固定形状的 Decode。
     if not self.enforce_eager:
         self.capture_cudagraph()
+    # 将默认设备设回 CPU，并恢复此前的数据类型。
     torch.set_default_device("cpu")
     torch.set_default_dtype(default_dtype)
 ```
-初始化 GPU 执行环境：
 
-- 每个 rank 对应一张 GPU，使用 NCCL 建立张量并行进程组
-- 临时把默认设备改为 CUDA、默认数据类型改为模型配置的 dtype，使模型参数直接创建在对应 GPU 上
-- 构造模型并从 safetensors 加载本 rank 所需的权重分片
-- 先预热并统计峰值显存，再使用剩余显存分配 KV Cache
-- 非 Eager 模式继续捕获 Decode 的 CUDA Graph
-- 最后恢复进程原来的默认设备和 dtype，避免影响其他代码
+**功能描述：** 初始化当前 rank 的 GPU 执行环境，加载模型并按显存预算分配缓存，必要时捕获 Decode 计算图，为后续批次执行做好准备。
 
 ```python
 if self.world_size > 1:
     if rank == 0:
+        # rank 0 创建共享区域，供各工作进程读取命令。
         self.shm = SharedMemory(
             name="nanovllm", create=True, size=2**20
         )
+        # 同步各 rank，保证连接前共享内存已经创建。
         dist.barrier()
     else:
+        # 同步各 rank，保证连接前共享内存已经创建。
         dist.barrier()
+        # rank 0 创建共享区域，供各工作进程读取命令。
         self.shm = SharedMemory(name="nanovllm")
+        # 工作进程持续等待和执行主进程命令。
         self.loop()
 ```
-多卡时，rank 0 是控制进程，其余 rank 进入命令循环：
 
-- 共享内存传递方法名和 Python 参数
-- `Event` 通知工作进程共享内存中出现了新命令
-- NCCL 负责模型内部的张量通信
-- `barrier()` 保证其他 rank 只在共享内存创建完成后连接
+**功能描述：** 建立多进程命令通道：rank 0 创建共享内存，其余 rank 连接后进入工作循环。命令参数通过共享内存传递，模型张量通信由 NCCL 负责。
 
 ```python
 def read_shm(self):
+    # 等待主进程发出新命令通知。
     self.event.wait()
+    # 前 4 字节存储后续 pickle 数据的长度。
     n = int.from_bytes(self.shm.buf[0:4], "little")
+    # 反序列化方法名和参数。
     method_name, *args = pickle.loads(self.shm.buf[4:n+4])
+    # 清除本次通知。
     self.event.clear()
     return method_name, args
 
+# 反序列化方法名和参数。
 def write_shm(self, method_name, *args):
+    # 反序列化方法名和参数。
+    # 将调用内容序列化到共享缓冲区。
     data = pickle.dumps([method_name, *args])
     n = len(data)
     self.shm.buf[0:4] = n.to_bytes(4, "little")
     self.shm.buf[4:n+4] = data
     for event in self.event:
+        # 通知每个工作进程读取命令。
         event.set()
 
+# 反序列化方法名和参数。
 def call(self, method_name, *args):
+    # 多卡时仅 rank 0 负责广播命令。
     if self.world_size > 1 and self.rank == 0:
+        # 反序列化方法名和参数。
         self.write_shm(method_name, *args)
+    # 主进程也调用本地同名方法。
     method = getattr(self, method_name, None)
     return method(*args)
 ```
-命令分发协议：
 
-- 前 4 字节记录 pickle 数据长度，之后保存方法名和参数
-- rank 0 写入并唤醒所有工作进程，然后自己也执行相同方法
-- 其他 rank 读取后通过 `getattr()` 调用本地同名方法
-- 因而所有 GPU 会以相同顺序执行 `run`、`exit` 等操作
+**功能描述：** 实现主进程向工作进程分发方法调用的协议，使各 rank 按一致顺序执行 run、exit 等操作。
 
 ```python
 def warmup_model(self):
+    # 释放可回收的分配器缓存，不会释放仍被引用的张量。
     torch.cuda.empty_cache()
+    # 从本次预热开始统计峰值。
     torch.cuda.reset_peak_memory_stats()
+    # 同时受批次 Token 预算和上下文长度约束。
     seq_len = min(max_num_batched_tokens, max_model_len)
+    # 根据单条长度和并发上限计算批次大小。
+    # 构造虚拟 Token 序列。
     num_seqs = min(
         max_num_batched_tokens // seq_len,
         self.config.max_num_seqs,
     )
+    # 构造虚拟 Token 序列。
     seqs = [Sequence([0] * seq_len) for _ in range(num_seqs)]
     for seq in seqs:
+        # 将整个虚拟输入设为本轮计算范围。
         seq.num_scheduled_tokens = seq_len
+    # 执行一次 Prefill；此时缓存尚未分配。
     self.run(seqs, True)
+    # 释放可回收的分配器缓存，不会释放仍被引用的张量。
     torch.cuda.empty_cache()
 ```
-模型预热：
 
-- 构造接近配置上限的虚拟 Prefill Batch，执行一次完整前向
-- 触发 PyTorch/FlashAttention 的初始化、内核选择或编译
-- `reset_peak_memory_stats()` 后执行预热，因此稍后可以读取模型运行时的峰值显存
-- 清除可释放的临时缓存，为 KV Cache 留出空间
+**功能描述：** 用接近配置上限的虚拟 Prefill 批次预热模型并记录峰值显存，为 KV Cache 容量估算提供运行时开销依据。
 
 ```python
 def allocate_kv_cache(self):
+    # 查询设备当前空闲显存与总显存。
     free, total = torch.cuda.mem_get_info()
     used = total - free
+    # 预热期间 PyTorch 的峰值已分配显存。
     peak = torch.cuda.memory_stats()["allocated_bytes.all.peak"]
+    # 当前已分配显存；peak - current 作为临时开销预留。
     current = torch.cuda.memory_stats()["allocated_bytes.all.current"]
     ...
+    # 一个物理块覆盖所有层的 K/V；KV Head 数已按 rank 切分。
     block_bytes = (
         2 * num_hidden_layers * block_size
         * num_kv_heads * head_dim * dtype.itemsize
     )
+    # 可用预算除以每块字节数，向下取整。
     config.num_kvcache_blocks = int(
         total * gpu_memory_utilization - used - peak + current
     ) // block_bytes
+    # 维度依次为 K/V、层、物理块、块内 Token、KV Head、Head 维度。
     self.kv_cache = torch.empty(
         2, num_hidden_layers, num_blocks,
         block_size, num_kv_heads, head_dim,
     )
 ```
-计算并分配 KV Cache：
 
-- 一个物理块必须包含所有 Transformer 层的 K 和 V，所以大小中有 `2 × num_hidden_layers`
-- KV Head 已按张量并行规模切分，每个 rank 只分配自己的部分
-- `peak - current` 是预热过程中出现过、但当前已经释放的临时显存；预算中需要为下一次前向重新预留
-- 可用于 KV Cache 的空间近似为：
+**功能描述：** 在显存预算中扣除已有占用和预热测得的临时峰值开销，计算并分配当前 rank 的分页 KV Cache。随后各 Attention 层使用这块大张量中对应层的视图。
+
+补充示意：
+
 ```
 总显存 × 利用率 - 当前已用显存 - (峰值显存 - 当前 PyTorch 显存)
 ```
-- 再除以单块字节数，得到可分配的物理块数量
 
-整体 KV Cache 形状：
 ```
 [K/V, layer, physical_block, token_in_block, kv_head, head_dim]
 ```
 
-随后遍历每一层 `Attention`，让其 `k_cache`、`v_cache` 指向大张量中对应层的视图。
-
 ```python
 def prepare_block_tables(self, seqs):
+    # 以最长页表作为本批次的统一宽度。
     max_len = max(len(seq.block_table) for seq in seqs)
     block_tables = [
+        # 较短页表用 -1 补齐无效位置。
         seq.block_table + [-1] * (max_len - len(seq.block_table))
         for seq in seqs
     ]
     return torch.tensor(
+        # 使用 int32 页表和 CPU 锁页内存。
         block_tables, dtype=torch.int32, pin_memory=True
+    # 发起到 GPU 的异步复制。
     ).cuda(non_blocking=True)
 ```
-不同序列占用的块数不同，因此先用 `-1` 补齐成二维矩阵，再从锁页内存异步复制到 GPU。
 
-`block_tables[b, i]` 表示 Batch 中第 `b` 条序列的第 `i` 个逻辑块位于哪个物理块。
+**功能描述：** 将不同长度的请求页表整理成 GPU 可读取的二维批量张量，供 Attention 定位每条序列的历史物理块。
 
 ```python
 def prepare_prefill(self, seqs):
@@ -195,24 +215,27 @@ def prepare_prefill(self, seqs):
     cu_seqlens_q, cu_seqlens_k = [0], [0]
     ...
     for seq in seqs:
+        # 跳过已有 KV 的前缀，也适用于此前完成的 Prefill 分块。
         start = seq.num_cached_tokens
+        # 本轮实际计算的 Query 数量。
         seqlen_q = seq.num_scheduled_tokens
         end = start + seqlen_q
+        # Key 覆盖从序列起点到本轮结束位置的全部上下文。
         seqlen_k = end
+        # 拼接各请求的输入，不做二维 Token Padding。
         input_ids.extend(seq[start:end])
+        # 保留 Token 在原序列中的绝对位置。
         positions.extend(range(start, end))
+        # 累加边界，例如长度 3、2 对应 [0, 3, 5]。
         cu_seqlens_q.append(cu_seqlens_q[-1] + seqlen_q)
+        # Key 边界单独累计，可能与 Query 长度不同。
         cu_seqlens_k.append(cu_seqlens_k[-1] + seqlen_k)
 ```
-组织 Prefill 输入：
 
-- 多条变长序列不做二维 Padding，而是把本轮需要计算的 Token 拼成一维数组
-- `cu_seqlens_q` 是各序列 Query 在扁平数组中的累积边界
-- `cu_seqlens_k` 是各序列完整上下文的累积边界
-- 无前缀缓存时 `seqlen_q == seqlen_k`
-- 命中前缀缓存时，Q 只包含未缓存部分，K/V 的有效长度还要包括已缓存前缀，因此 `seqlen_k = end`
+**功能描述：** 把变长 Prefill 输入拼成扁平 Token 数组，并生成位置和序列边界。Query 只覆盖本轮新增计算部分，Key 的有效范围包含已经缓存的历史。
 
-例如两条 Q 长度分别为 3 和 2：
+补充示意：
+
 ```
 扁平 Token: [A A A | B B]
 cu_seqlens_q: [0, 3, 5]
@@ -220,100 +243,101 @@ cu_seqlens_q: [0, 3, 5]
 
 ```python
 for i in range(start_block, end_block):
+    # 槽位起点 = 物理块编号 × 每块 Token 数。
     slot_start = seq.block_table[i] * self.block_size
     ...
+    # 加入本轮覆盖的块内位置，形成逐 Token 的写入映射。
     slot_mapping.extend(range(slot_start, slot_end))
 ```
-`slot_mapping` 把本轮每个新 Token 映射到扁平 KV Cache 槽位：
+
+**功能描述：** 为本轮新 Token 构造 KV 写入地址，将逻辑位置转换为扁平物理槽位。完整输入准备流程还会在需要读取缓存前缀时传入页表，并把元数据写入 Context。
+
+补充示意：
+
 ```
 slot = physical_block_id × block_size + offset_in_block
 ```
-Attention 层使用它将新计算出的 K/V 写入正确的物理位置。
-
-如果 K 的累计长度大于 Q，说明存在复用前缀，此时额外传入 `block_tables`，让 FlashAttention 从 Paged KV Cache 中读取完整 K/V；最后把全部元数据写入全局 `Context`。
 
 ```python
 def prepare_decode(self, seqs):
     for seq in seqs:
+        # 只输入上轮生成的最后一个 Token。
         input_ids.append(seq.last_token)
+        # 位置从 0 开始，因此为总长度减 1。
         positions.append(len(seq) - 1)
+        # 当前前向可见的上下文长度，包含此次写入位置。
         context_lens.append(len(seq))
+        # 末物理块起点加末块内偏移，得到写入位置。
         slot_mapping.append(
             seq.block_table[-1] * self.block_size
             + seq.last_block_num_tokens - 1
         )
 ```
-组织 Decode 输入：
 
-- 每条序列只输入最后一个 Token
-- 位置是当前序列长度减一
-- `context_lens` 告诉 Attention 每条序列可读取多少个历史 Token
-- `slot_mapping` 指向当前最后一个 Token 的 KV 写入位置
-- `block_tables` 告诉 Attention 如何沿物理块读取全部历史 KV Cache
+**功能描述：** 组织 Decode 所需的单 Token 输入、位置、有效上下文长度和缓存写入槽位，使模型复用历史 KV 来计算下一个 Token。完整方法还会准备批量页表。
 
 ```python
 def run_model(self, input_ids, positions, is_prefill):
+    # Prefill、强制 Eager 或超过此处 512 阈值时直接前向。
     if is_prefill or self.enforce_eager or input_ids.size(0) > 512:
         return self.model.compute_logits(
             self.model(input_ids, positions)
         )
     ...
+    # 选择能容纳真实批次的最小已捕获图。
     graph = self.graphs[next(x for x in self.graph_bs if x >= bs)]
     ...
+    # 重放前已更新静态输入，填充槽位使用 -1 等无效标记。
     graph.replay()
+    # 只取前 bs 条真实序列的隐藏状态计算 logits。
     return self.model.compute_logits(graph_vars["outputs"][:bs])
 ```
-选择执行方式：
 
-- Prefill 形状变化大，直接 Eager 执行
-- 强制 Eager 或 Decode Batch 超过捕获上限时，也直接执行
-- 其他 Decode 请求选择不小于真实 Batch Size 的最小 CUDA Graph
-- 把真实输入复制进 Graph 的静态缓冲区，剩余槽位通过 `slot_mapping=-1`、`context_lens=0` 屏蔽
-- Replay 后只取前 `bs` 条真实输出计算 logits
+**功能描述：** 根据阶段、配置和批次大小选择直接执行或 CUDA Graph 回放，并返回 logits。图模式使用固定缓冲区，完整实现会复制真实输入并屏蔽补齐位置，只读取有效输出。
 
 ```python
 def run(self, seqs, is_prefill):
+    # 按 Prefill 或 Decode 分支组织输入并设置 Context。
     input_ids, positions = (
         self.prepare_prefill(seqs)
         if is_prefill else self.prepare_decode(seqs)
     )
+    # 仅 rank 0 需要采样温度。
     temperatures = (
         self.prepare_sample(seqs) if self.rank == 0 else None
     )
+    # 所有 rank 参与模型计算和张量并行通信。
     logits = self.run_model(input_ids, positions, is_prefill)
+    # rank 0 返回采样结果，其余 rank 返回 None。
     token_ids = (
         self.sampler(logits, temperatures).tolist()
         if self.rank == 0 else None
     )
+    # 避免下一轮误用当前批次元数据。
     reset_context()
     return token_ids
 ```
-一次模型执行的完整路径：
 
-1. 准备 Prefill 或 Decode 输入
-2. 只有 rank 0 准备温度并执行最终采样
-3. 所有 rank 都执行模型前向和张量并行通信
-4. 清空全局 Context，避免下一轮误用旧元数据
-5. rank 0 把生成的 Token ID 返回调度器
+**功能描述：** 串起一次模型执行：准备输入、完成各 rank 的前向计算，再由 rank 0 采样返回 Token ID，最后清空当前上下文。
 
 ```python
+# 小批次取 1/2/4/8，较大批次按 16 的间隔捕获。
 self.graph_bs = [1, 2, 4, 8] + list(range(16, max_bs + 1, 16))
+# 从大到小捕获，并共享图内存池。
 for bs in reversed(self.graph_bs):
     graph = torch.cuda.CUDAGraph()
     set_context(...)
-    outputs[:bs] = self.model(...)  # warmup
+    # 捕获前先执行预热。
+    outputs[:bs] = self.model(...)  # 预热
+    # 记录模型执行到 CUDA Graph。
     with torch.cuda.graph(graph, self.graph_pool):
         outputs[:bs] = self.model(...)
     ...
 ```
-`capture_cudagraph` 为一组固定 Batch Size 预先捕获 Decode 计算图：
 
-- CUDA Graph 要求张量地址和形状固定，因此预先创建最大尺寸的输入、缓存元数据和输出缓冲区
-- 小 Batch 使用 1、2、4、8，大 Batch 以 16 为间隔，兼顾显存占用与 Padding 浪费
-- 从大到小捕获并共享 graph memory pool
-- Replay 可以减少每个 Decode step 的 Python 和 CUDA Kernel Launch 开销
+**功能描述：** 为多种固定批次大小捕获 Decode 图，后续回放可减少 Python 调度和 CUDA Kernel 启动开销。固定输入、输出及缓存元数据缓冲区确保捕获和回放时地址与形状一致。
 
-`exit()` 则负责关闭共享内存、同步 GPU、释放 CUDA Graph 并销毁 NCCL 进程组。
+执行器退出时，`exit()` 负责关闭共享内存、同步 GPU、释放 CUDA Graph 并销毁 NCCL 进程组。
 
 ---
 

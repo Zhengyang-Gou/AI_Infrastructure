@@ -9,70 +9,78 @@
 ```python
 @triton.jit
 def store_kvcache_kernel(...):
+    # 每个 Triton Program 负责一个 Token。
     idx = tl.program_id(0)
+    # 读取当前 Token 对应的扁平物理槽位。
     slot = tl.load(slot_mapping_ptr + idx)
+    # 读取当前 Token 对应的扁平物理槽位。
+    # CUDA Graph 补齐位置不写缓存。
     if slot == -1:
         return
     ...
+    # 写入该 Token 的全部 KV Head 和 Head 维度。
     tl.store(k_cache_ptr + cache_offsets, key)
+    # V 使用与 K 对应的物理槽位。
     tl.store(v_cache_ptr + cache_offsets, value)
 ```
-自定义 Triton Kernel 将本轮产生的 K/V 写入 Paged KV Cache：
 
-- 每个 Program 负责一个 Token
-- `slot_mapping[idx]` 给出该 Token 的扁平物理槽位
-- 一个 Token 的所有 KV Head 和 Head Dim 被当作长度 `D` 的连续区域复制
-- `slot=-1` 用于 CUDA Graph Padding，表示该位置不应写缓存
+**功能描述：** 将本轮计算出的 K/V 散写到分页缓存中的指定槽位，使后续注意力计算可以通过页表读取历史数据。
 
 ```python
 def forward(self, q, k, v):
+    # 读取执行器为本批次准备的元数据。
     context = get_context()
+    # 缓存非空才执行写入。
     if k_cache.numel() and v_cache.numel():
+        # 按 slot_mapping 将新 K/V 写入本层缓存。
         store_kvcache(
             k, v, k_cache, v_cache, context.slot_mapping
         )
 ```
-Attention 每一层首先把新 K/V 写入该层自己的缓存。模型预热发生在 KV Cache 分配前，此时 Cache 是空张量，因此跳过写入。
+
+**功能描述：** 在每层 Attention 前向中更新该层 KV Cache。预热时缓存尚未分配，因此跳过写入，直接使用本轮 K/V 计算。
 
 ```python
 if context.is_prefill:
+    # 存在页表时改用分页 K/V，以包含已缓存前缀。
     if context.block_tables is not None:
         k, v = k_cache, v_cache
+    # 用变长内核处理扁平拼接的 Query。
     o = flash_attn_varlen_func(
         q, k, v,
+        # Query 和 Key 分别给出序列边界。
         cu_seqlens_q=context.cu_seqlens_q,
         cu_seqlens_k=context.cu_seqlens_k,
+        # 提供本批次最大长度用于内核执行。
         max_seqlen_q=context.max_seqlen_q,
         max_seqlen_k=context.max_seqlen_k,
         softmax_scale=self.scale,
+        # 每个位置只能关注自身及之前的 Token。
         causal=True,
+        # 将逻辑块映射到物理缓存块。
         block_table=context.block_tables,
     )
 ```
-Prefill 使用变长 FlashAttention：
 
-- 普通 Prefill：直接使用本轮连续的 Q/K/V
-- 命中前缀缓存：K/V 改为整个分页缓存，并通过 `block_table` 找到当前序列的历史块
-- `cu_seqlens` 描述扁平 Batch 中每条序列的边界
-- `causal=True` 保证 Token 只能看到自己及之前的位置
+**功能描述：** 计算变长批次的 Prefill 注意力。普通输入使用本轮 K/V，存在缓存前缀时通过页表读取完整上下文，同时保持因果可见范围。
 
 ```python
 else:
+    # 使用适合逐 Token 解码的缓存注意力接口。
     o = flash_attn_with_kvcache(
+        # 补出长度为 1 的 Query 序列维。
         q.unsqueeze(1), k_cache, v_cache,
+        # 每条序列仅访问有效上下文。
         cache_seqlens=context.context_lens,
+        # 从逻辑位置定位物理缓存块。
         block_table=context.block_tables,
         softmax_scale=self.scale,
+        # 维持自回归因果约束。
         causal=True,
     )
 ```
-Decode 时每条序列只有一个 Query，使用专门的 KV Cache Attention：
 
-- `context_lens` 限制每条序列的有效缓存长度
-- `block_table` 将逻辑位置映射到非连续的物理块
-- 不需要复制、拼接每条序列的历史 K/V
-
-因此 PagedAttention 的核心并不是改变注意力公式，而是让注意力 Kernel 能通过页表直接读取离散物理块。
+**功能描述：** 计算 Decode 的单 Query 注意力，通过页表直接访问离散的历史 KV 块，避免为每条序列复制或拼接完整缓存。
 
 ---
 

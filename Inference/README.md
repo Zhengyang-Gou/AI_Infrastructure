@@ -5,4 +5,5 @@
 - [学习路线与时间安排](Roadmap.md)
 - [01 · 已有基础笔记](01-LLM-Inference-Basics/README.md)
 - [02 · 开始实现 Mini Inference Engine](02-Mini-Inference-Engine/)
+- [03 · Engine 核心机制](03-Engine-Core-Mechanisms/README.md)
 - [已有源码与算法参考资料](References/README.md)

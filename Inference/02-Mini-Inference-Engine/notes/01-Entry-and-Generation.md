@@ -6,17 +6,32 @@
 
 ## 本篇在做什么
 
-```mermaid
-flowchart TD
-    A["Prompt + SamplingParams"] --> B["generate：批量提交请求"]
-    B --> C["add_request：编码文本，创建 Sequence"]
-    C --> D["Scheduler：请求进入等待队列"]
-    D --> E["step：调度本轮请求"]
-    E --> F["ModelRunner：前向计算并采样"]
-    F --> G["postprocess：更新请求与缓存状态"]
-    G --> H{"所有请求已完成？"}
-    H -->|否| E
-    H -->|是| I["按请求 ID 排序，解码并返回文本与 Token ID"]
+```text
+Prompt + SamplingParams
+    |
+    v
+generate：批量提交请求
+    |
+    v
+add_request：编码文本，创建 Sequence
+    |
+    v
+Scheduler：请求进入等待队列
+    |
+    v
+step：调度本轮请求
+    |
+    v
+ModelRunner：前向计算并采样
+    |
+    v
+postprocess：更新请求与缓存状态
+    |
+    v
+所有请求已完成？
+    +-- 否 --> 返回 step，继续下一轮
+    |
+    +-- 是 --> 按请求 ID 排序，解码并返回文本与 Token ID
 ```
 
 **读图说明：** 这一层负责把一次 `generate()` 调用推进到所有请求完成。文本先被包装成 `Sequence`，随后循环调用 `step()`；每轮只推进选中的请求，最终按提交顺序整理输出。模型配置在引擎初始化时生效，温度和停止条件则随每条请求保存。

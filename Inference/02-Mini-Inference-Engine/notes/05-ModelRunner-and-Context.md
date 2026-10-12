@@ -6,19 +6,32 @@
 
 ## 本篇在做什么
 
-```mermaid
-flowchart TD
-    A["初始化：加载权重 → 预热 → 分配 KV Cache"] --> B["按配置捕获 Decode CUDA Graph"]
-    B --> C["run：接收本轮 Sequence 与阶段标记"]
-    C --> D{"Prefill / Decode？"}
-    D -->|Prefill| E["拼接待计算 Token，生成位置与累计长度"]
-    D -->|Decode| F["每条取 last_token，生成位置与上下文长度"]
-    E --> G["准备 slot_mapping 和所需页表，设置 Context"]
-    F --> G
-    G --> H["run_model：Eager 或 Decode 图回放"]
-    G -.->|各层读取元数据| H
-    H --> I["LM Head：rank 0 获得完整 logits"]
-    I --> J["rank 0 采样，reset_context，返回 Token ID"]
+```text
+初始化：加载权重 -> 预热 -> 分配 KV Cache
+    |
+    v
+按配置捕获 Decode CUDA Graph
+    |
+    v
+run：接收本轮 Sequence 与阶段标记
+    |
+    v
+Prefill / Decode？
+    +-- Prefill --> 拼接待计算 Token，生成位置与累计长度
+    |
+    +-- Decode ---> 每条取 last_token，生成位置与上下文长度
+    |
+    v（两条分支汇合）
+准备 slot_mapping 和所需页表，设置 Context
+    |
+    v
+run_model：Eager 或 Decode 图回放（各层读取 Context 元数据）
+    |
+    v
+LM Head：rank 0 获得完整 logits
+    |
+    v
+rank 0 采样，reset_context，返回 Token ID
 ```
 
 **读图说明：** `ModelRunner` 把 CPU 侧请求记录转换成 GPU 可执行的批量张量。Token 和位置作为模型输入，缓存槽位、页表和长度放入 `Context`，供 Attention 读取。Prefill 只计算尚无 KV 的输入片段，Decode 每条只输入最新 Token；符合条件的 Decode 可回放 CUDA Graph，最后由 rank 0 返回采样结果。

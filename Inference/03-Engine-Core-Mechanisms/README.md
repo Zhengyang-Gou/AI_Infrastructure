@@ -2,7 +2,7 @@
 
 第三周学习入口：Scheduler、Continuous Batching、Paged KV Cache、Prefix Cache、Chunked Prefill。
 
-学习目标：结合第二阶段的 Mini Inference Engine，理解请求调度、批处理与 KV Cache 管理如何协作。以下笔记为待完成的学习模板。
+学习目标：结合第二阶段的 Mini Inference Engine，理解请求调度、批处理与 KV Cache 管理如何协作。本阶段从源码的设计思路出发讲解机制，使用流程图、表格与手工推演连接五个主题。
 
 ## 学习顺序
 
@@ -16,15 +16,6 @@
 
 ## 学习方式
 
-每个主题按「问题 → 机制 → 源码 → 手工推演 → 总结」补充笔记。先复习 [Nano-vLLM 笔记](../02-Mini-Inference-Engine/notes/README.md)，再对照 [本地 vLLM 源码](../04-vLLM-Source/vllm/)。记录所读代码版本与实现差异。
-
-## 学习验收
-
-- [ ] 画出请求从等待、执行到完成的调度流程。
-- [ ] 用三个长度不同的请求推演 Continuous Batching。
-- [ ] 手工追踪 KV Cache 块的分配、映射与释放。
-- [ ] 推演公共前缀的缓存命中与未命中情况。
-- [ ] 推演一个长 Prompt 与多个 Decode 请求共存的调度过程。
-- [ ] 串起五种机制，说明需要观察的 TTFT、TPOT、吞吐与缓存占用指标。
+每个主题按「问题 → 机制 → 手工推演 → 协作关系 → 观察指标」组织。先复习 [Mini Inference Engine 笔记](../02-Mini-Inference-Engine/notes/README.md)，再沿着一条请求追踪计算进度、缓存状态和执行机会。当前阶段不展开代码、字段与函数细节，具体实现留到下一阶段学习。
 
 [上一阶段：Mini Inference Engine](../02-Mini-Inference-Engine/README.md) · [下一阶段：vLLM 源码](../04-vLLM-Source/) · [学习路线](../Roadmap.md)

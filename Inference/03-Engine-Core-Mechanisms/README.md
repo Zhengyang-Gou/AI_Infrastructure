@@ -1,6 +1,6 @@
 # 03 · Engine 核心机制
 
-第三周学习入口：Scheduler、Continuous Batching、Paged KV Cache、Prefix Cache、Chunked Prefill。
+本阶段围绕五项机制展开：Scheduler、Continuous Batching、Paged KV Cache、Prefix Cache、Chunked Prefill。
 
 学习目标：结合第二阶段的 Mini Inference Engine，理解请求调度、批处理与 KV Cache 管理如何协作。本阶段从源码的设计思路出发讲解机制，使用流程图、表格与手工推演连接五个主题。
 
@@ -16,6 +16,6 @@
 
 ## 学习方式
 
-每个主题按「问题 → 机制 → 手工推演 → 协作关系 → 观察指标」组织。先复习 [Mini Inference Engine 笔记](../02-Mini-Inference-Engine/notes/README.md)，再沿着一条请求追踪计算进度、缓存状态和执行机会。当前阶段不展开代码、字段与函数细节，具体实现留到下一阶段学习。
+每个主题按「问题 → 机制 → 手工推演 → 协作关系 → 观察指标」组织。先复习 [Mini Inference Engine 笔记](../02-Mini-Inference-Engine/notes/README.md)，再沿着一条请求追踪计算进度、缓存状态和执行机会。本阶段聚焦机制与协作关系，字段、函数与调用链对应到 [vLLM 源码笔记](../04-vLLM-Source/notes/)。
 
 [上一阶段：Mini Inference Engine](../02-Mini-Inference-Engine/README.md) · [下一阶段：vLLM 源码](../04-vLLM-Source/) · [学习路线](../Roadmap.md)

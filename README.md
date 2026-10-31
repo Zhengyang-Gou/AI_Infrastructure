@@ -6,7 +6,7 @@
 
 A learning-oriented repository for understanding the systems behind modern AI workloads—from Transformer fundamentals and GPU execution to distributed training and high-performance LLM inference.
 
-The repository combines conceptual notes, paper walkthroughs, small experiments, and source-code studies. Most in-depth notes are currently written in Chinese; this page and the Chinese homepage provide bilingual project navigation.
+The repository combines conceptual notes, paper walkthroughs, small experiments, and source-code studies. The in-depth notes use Chinese; this page and the Chinese homepage provide bilingual project navigation.
 
 ## Learning Map
 
@@ -37,7 +37,7 @@ Transformer foundations
 
 ## Inference Roadmap
 
-Follow nine stages. Stage 01 contains existing notes; stages 02–09 are empty directories for future work.
+Follow nine stages, from inference fundamentals and a minimal engine to GPU programming and engine–kernel integration.
 
 1. [LLM Inference Basics](Inference/01-LLM-Inference-Basics/README.md)
 2. [Mini Inference Engine](Inference/02-Mini-Inference-Engine/)
@@ -49,7 +49,7 @@ Follow nine stages. Stage 01 contains existing notes; stages 02–09 are empty d
 8. [CUDA](Inference/08-CUDA/)
 9. [Engine × Kernel](Inference/09-Engine-Kernel-Integration/)
 
-See the [full roadmap and schedule](Inference/Roadmap.md). Stage 01 has existing notes; content for stages 02–09 will be added as learning progresses.
+See the [full roadmap and schedule](Inference/Roadmap.md) for topics, goals, and connections between stages.
 
 ## How to Use This Repository
 
@@ -66,10 +66,6 @@ python train.py
 ```
 
 Requirements vary by track. Python, PyTorch, CUDA, and multi-GPU dependencies should be installed according to the experiment you plan to run and your local hardware.
-
-## Project Status
-
-This is an evolving personal learning project. Notes may be expanded, reorganized, or corrected as the study progresses. Issues and pull requests that improve technical accuracy, explanations, or navigation are welcome.
 
 ## Acknowledgements
 

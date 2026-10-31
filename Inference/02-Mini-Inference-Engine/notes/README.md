@@ -1,6 +1,6 @@
 # Nano-vLLM 源码学习笔记
 
-以本目录保存的 Nano-vLLM 源码为例，按依赖关系阅读。原始笔记中的讲解和代码片段已按主题保留。
+以本目录保存的 Nano-vLLM 源码为例，按依赖关系阅读，通过概念讲解、流程图和代码片段串起生成过程。
 
 建议先复习 [推理基础](../../01-LLM-Inference-Basics/README.md) 中的 Prefill / Decode、KV Cache 和采样，再依次阅读：
 

@@ -6,7 +6,7 @@
 
 这是一个面向学习的 AI 基础设施仓库，目标是从 Transformer 基础、GPU 执行原理出发，逐步理解分布式训练与高性能大模型推理系统。
 
-仓库包含概念笔记、论文解读、小型实验与源码学习记录。当前深度笔记主要使用中文；英文主页与本页共同提供双语项目导航。
+仓库包含概念笔记、论文解读、小型实验与源码学习记录。深度笔记使用中文；英文主页与本页共同提供双语项目导航。
 
 ## 学习地图
 
@@ -37,7 +37,7 @@ Transformer 基础
 
 ## 推理学习路线
 
-按以下九阶段推进；01 已有笔记，02–09 暂为空目录。
+按以下九阶段推进，从推理基础与最小引擎，逐步进入 GPU 编程与引擎、Kernel 集成。
 
 1. [LLM 推理基础](Inference/01-LLM-Inference-Basics/README.md)
 2. [Mini Inference Engine](Inference/02-Mini-Inference-Engine/)
@@ -49,7 +49,7 @@ Transformer 基础
 8. [CUDA](Inference/08-CUDA/)
 9. [Engine × Kernel](Inference/09-Engine-Kernel-Integration/)
 
-[查看完整路线与时间安排](Inference/Roadmap.md)。01 已有正文，02–09 的内容将在学习时逐步添加。
+[完整路线与时间安排](Inference/Roadmap.md)说明各阶段的主题、目标与衔接关系。
 
 ## 使用方式
 
@@ -66,10 +66,6 @@ python train.py
 ```
 
 不同学习方向的环境要求并不相同。请根据实验内容和本地硬件，分别安装 Python、PyTorch、CUDA 与多 GPU 相关依赖。
-
-## 项目状态
-
-这是一个持续更新的个人学习项目。随着学习深入，笔记可能继续补充、调整结构或修正内容。欢迎通过 Issue 或 Pull Request 改进技术准确性、文字说明与项目导航。
 
 ## 致谢
 

@@ -1,8 +1,8 @@
 # LLM 推理学习路线
 
-按照 **基础 → 最小引擎 → 引擎机制 → vLLM 源码 → 性能分析 → GPU → Triton → CUDA → 集成作品** 推进。01 已有正文，02–09 保留空目录，后续学习时逐步添加内容。
+按照 **基础 → 最小引擎 → 引擎机制 → vLLM 源码 → 性能分析 → GPU → Triton → CUDA → 集成作品** 推进。各阶段围绕概念理解、源码阅读和实验验证衔接。
 
-前八阶段共 **20～23 周**，第九阶段持续迭代。已掌握 01 后，可从 02 开始，后续阶段 02–08 预计 **18～21 周**。
+前八阶段的建议学习预算共 **20～23 周**，其中阶段 02–08 为 **18～21 周**；第九阶段用于持续打磨集成作品。已掌握的基础内容可通过自测后进入下一阶段。
 
 | 阶段 | 时间 | 学什么 | 目标 |
 | --- | ---: | --- | --- |
@@ -21,7 +21,7 @@
 ```text
 Inference/
 ├── Roadmap.md
-├── 01-LLM-Inference-Basics/       # 已有基础笔记
+├── 01-LLM-Inference-Basics/       # Transformer、Attention 与推理流程
 ├── 02-Mini-Inference-Engine/
 ├── 03-Engine-Core-Mechanisms/
 ├── 04-vLLM-Source/
@@ -30,9 +30,7 @@ Inference/
 ├── 07-Triton/
 ├── 08-CUDA/
 ├── 09-Engine-Kernel-Integration/
-├── References/                  # 参考索引与扩展主题
-├── Phase2/                      # 已有 Softmax / FlashAttention 资料
-└── Phase3/                      # nano-vLLM / vLLM 源码快照
+└── Phase2/                      # Online Softmax 与 FlashAttention
 ```
 
 ## 阶段衔接
@@ -46,8 +44,8 @@ Inference/
 
 ## 使用方式
 
-01 保留现有笔记与导航，02–09 只保留目录。学习时按需新增笔记；代码实验可放在对应阶段的 `code/`，配置与报告放在 `experiments/`，有实际内容时再创建。
+按阶段编号阅读，以各阶段的主题与目标组织笔记。代码实验放在对应阶段的 `code/`，配置与报告放在 `experiments/`；源码学习笔记通过文内链接定位到对应实现。
 
 阶段时间是学习预算，进入下一阶段前优先检查验收项。统一记录硬件、软件版本、运行命令、正确性误差和基准口径，让后续阶段复用前面的结果。
 
-现有源码与算法笔记通过 [参考索引](References/README.md) 连接；量化、MoE、分布式推理等原有主题保留在 [扩展主题备忘](References/Extended-Topics.md)，按项目需要选学。
+源码阅读分别从 [Nano-vLLM](02-Mini-Inference-Engine/source/nano-vllm/) 与 [vLLM](04-vLLM-Source/vllm/) 进入，Attention 算法参考 [Online Softmax 与 FlashAttention](Phase2/)。量化、MoE 与分布式推理可结合模型结构和实验目标扩展阅读。

@@ -4,7 +4,7 @@
 
 上一章已经串起「准备输入 → 构造请求 → 提交核心 → 收集结果」。这一章进入核心内部，重点掌握 **接收请求 → 调度 → 执行 → 更新状态 → 返回增量** 的循环。
 
-以仓库内 `04-vLLM-Source/vllm/` 的源码为依据，先沿普通文本、decoder-only、每条输入一个候选（`n=1`）、单核心的生成路径阅读。
+固定场景见[顶层 README](../README.md) 第 1 节，推演案例见第 2 节。
 
 ## 1. 本章在学习路线中的位置
 
@@ -55,8 +55,8 @@ Engine Core：接收请求，组织一轮轮调度与执行             ← 本�
 | --- | --- | --- |
 | [03 · Scheduler](../03-Scheduler/) | schedule 产生本轮执行计划，执行结果回来后更新请求 | token 预算、排队策略、抢占、Chunked Prefill、连续批处理 |
 | [04 · KV Cache Management](../04-KV-Cache-Management/) | 调度需要缓存块；请求结束需要释放相应引用 | 块分配、引用计数、前缀复用、缓存不足时的处理 |
-| [05 · Model Execution](../05-Model-Execution/) | Executor 接收调度计划，将执行任务交给 Worker / Model Runner | 输入张量、位置、block table、模型前向及采样调用 |
-| [08 · Sampling and End-to-End](../08-Sampling-and-End-to-End/) | 核心取得采样后的 token，检查结束条件并返回增量 | 采样算法与完整执行链路复盘 |
+| [06 · Model Execution](../06-Model-Execution/) | Executor 接收调度计划，将执行任务交给 Worker / Model Runner | 输入张量、位置、block table、模型前向及采样调用 |
+| [08 · Sampling](../08-Sampling/) | 核心取得采样后的 token，检查结束条件并返回增量 | 采样算法与完整执行链路复盘 |
 
 先用 `EngineCore.step()` 理解顺序明确的一轮执行，再认识 `step_with_batch_queue()` 如何允许多批次在途。具体调度器类型与 `step_fn` 由本地配置选择。
 

@@ -83,7 +83,7 @@ with (
 3. `future.result()` 等待并取回这次执行的返回值，也会传播执行异常。
 4. 返回值为 `None` 时，继续调用 `sample_tokens()`，得到 `ModelRunnerOutput`。
 
-这里的 `None` 是继续进入采样调用的分支条件，不能据此认为请求已经没有后续工作。具体执行器如何拆分模型前向和采样，由 [Model Execution](../../05-Model-Execution/) 分析。
+这里的 `None` 是继续进入采样调用的分支条件，不能据此认为请求已经没有后续工作。具体执行器如何拆分模型前向和采样，由 [Model Execution](../../06-Model-Execution/) 分析。
 
 `non_block=True` 让下发接口先返回 Future；普通 `step()` 随后仍会调用 `.result()`。这个参数本身不能说明整轮已经实现多批次重叠。
 

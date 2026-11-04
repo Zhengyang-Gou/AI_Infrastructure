@@ -4,7 +4,7 @@
 
 上一章已经串起 `schedule → execute_model / sample_tokens → update_from_output`。这一章进入 Scheduler 内部，将请求进度、token 预算、队列策略和 KV Cache 约束放到同一轮执行中理解。
 
-以仓库内 `04-vLLM-Source/vllm/` 的源码为依据，主线固定为普通文本、decoder-only、每条输入一个候选（`n=1`）、单核心生成。先沿基础 `Scheduler` 和没有多批次在途的执行顺序阅读，再认识 `AsyncScheduler`、推测解码等扩展。
+固定场景见[顶层 README](../README.md) 第 1 节。先沿基础 `Scheduler` 和没有多批次在途的执行顺序阅读，再认识 `AsyncScheduler`、推测解码等扩展。
 
 ## 1. 本章在学习路线中的位置
 
@@ -57,8 +57,8 @@ Scheduler：维护请求，决定本轮计算内容并更新执行状态       �
 | --- | --- | --- |
 | [02 · Engine Core](../02-Engine-Core/README.md) | schedule 与 update_from_output 怎样接入执行闭环 | 客户端、核心进程循环、执行器调用与结果返回 |
 | [04 · KV Cache Management](../04-KV-Cache-Management/) | 查询命中、申请块、分配失败后的调度选择与资源释放接口 | 块池、引用计数、前缀匹配、缓存淘汰与实际回收时机 |
-| [05 · Model Execution](../05-Model-Execution/) | 执行侧需要怎样的计划，结果怎样按请求 ID 对回 | 输入张量、位置、block table、模型前向与执行侧状态 |
-| [08 · Sampling and End-to-End](../08-Sampling-and-End-to-End/) | 取得有效新 token，检查请求是否结束 | 采样算法与从请求到输出的整条链路 |
+| [06 · Model Execution](../06-Model-Execution/) | 执行侧需要怎样的计划，结果怎样按请求 ID 对回 | 输入张量、位置、block table、模型前向与执行侧状态 |
+| [08 · Sampling](../08-Sampling/) | 取得有效新 token，检查请求是否结束 | 采样算法与从请求到输出的整条链路 |
 | [09 · Runtime Optimizations](../09-Runtime-Optimizations/) | 异步占位、推测 token 与调度进度如何衔接 | 批次重叠、推测解码等优化的完整执行机制 |
 
 ## 5. 本章学习目标

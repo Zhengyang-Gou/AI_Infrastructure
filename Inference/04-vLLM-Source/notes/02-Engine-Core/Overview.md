@@ -49,7 +49,7 @@ LLMEngine
 | Scheduler | 持有 Request，选择本轮计算内容，并根据返回结果更新状态 |
 | KVCacheManager | 为调度提供可用缓存块，处理缓存分配、复用与释放 |
 | Executor | 将本轮计划交给执行侧，取得 ModelRunnerOutput |
-| Worker / Model Runner | 将计划落实为模型执行；具体实现见 [Model Execution](../05-Model-Execution/) |
+| Worker / Model Runner | 将计划落实为模型执行；具体实现见 [Model Execution](../06-Model-Execution/) |
 
 核心初始化时，先创建 Executor，再通过 `_initialize_kv_caches()` 收集缓存需求、确定容量并初始化执行侧缓存，随后创建 Scheduler。这样调度器才能按照已经准备好的资源安排请求。
 
@@ -204,7 +204,7 @@ EngineCoreProc.run_busy_loop 反复执行
 | [04 · 谁驱动执行](Core-Modules/04-Core-Client-and-Process-Loop.md) | [vllm/v1/engine/core_client.py](../../vllm/vllm/v1/engine/core_client.py) · InprocClient / SyncMPClient；core.py · EngineCoreProc | add_request、get_output、run_busy_loop、_process_input_queue、_process_engine_step |
 | [05 · 完成与取消](Core-Modules/05-Completion-and-Abort.md) | [vllm/v1/core/sched/utils.py](../../vllm/vllm/v1/core/sched/utils.py) · 模块级函数；core.py · EngineCore；scheduler.py · Scheduler | check_stop、abort_requests、finish_requests、_free_request |
 
-读具体实现时，沿上表 01 → 05 推进；第 03 站是本章中心。调度先读输入输出和调用位置，后续在 [03 · Scheduler](../03-Scheduler/) 深入选择策略，再进入 [04 · KV Cache Management](../04-KV-Cache-Management/) 与 [05 · Model Execution](../05-Model-Execution/)。
+读具体实现时，沿上表 01 → 05 推进；第 03 站是本章中心。调度先读输入输出和调用位置，后续在 [03 · Scheduler](../03-Scheduler/) 深入选择策略，再进入 [04 · KV Cache Management](../04-KV-Cache-Management/) 与 [06 · Model Execution](../06-Model-Execution/)。
 
 回看主线时，尝试自己解释：新请求保存在哪里？本轮计划由谁产生？结果回来后谁更新 Request？未完成的请求如何再次参与执行？能把这几个问题连接起来，就建立了核心执行框架。
 

@@ -2,7 +2,7 @@
 
 **Scheduler 将请求剩余的计算需求与本轮预算、运行名额和 KV Cache 条件对齐，形成执行计划，再根据结果推进请求。**
 
-本文沿本地源码的普通文本、decoder-only、`n=1`、单核心生成路径阅读。先用基础 `Scheduler` 和每轮结果返回后再开始下一轮的顺序建立认识，最后再看异步调度。读完应能手工解释：谁入选、算多少、谁等待、谁被抢占，以及下一轮为什么还能继续。
+场景设定见[顶层 README](../README.md) 第 1 节，本文第 6 节的推演即其中的案例 A。先用基础 `Scheduler` 和每轮结果返回后再开始下一轮的顺序建立认识，最后再看异步调度。读完应能手工解释：谁入选、算多少、谁等待、谁被抢占，以及下一轮为什么还能继续。
 
 ## 1. 接上上一章：进入 schedule 内部
 
@@ -163,7 +163,7 @@ Scheduler 按 `running` 列表顺序访问请求，计算进度差，应用分�
 
 ## 6. 用三条请求走完四轮
 
-设每轮 token 预算为 **4**，`max_num_seqs=2`，启用 Chunked Prefill，`long_prefill_token_threshold=0`。KV 容量充足、长度限制不触发，无前缀命中、推测解码、异步占位或提前停止。
+本节即[顶层 README](../README.md) 里的案例 A，其他模块引用这组数字。设每轮 token 预算为 **4**，`max_num_seqs=2`，启用 Chunked Prefill，`long_prefill_token_threshold=0`。KV 容量充足、长度限制不触发，无前缀命中、推测解码、异步占位或提前停止。
 
 - B：2 个 Prompt token，最多生成 2 个 token，先于 A 入队。
 - A：6 个 Prompt token，最多生成 2 个 token。

@@ -15,7 +15,7 @@ EngineCore.__init__
     → 选择 step_fn
 ```
 
-本篇读清创建顺序和组件关系。缓存容量的计算方法见 [KV Cache Management](../../04-KV-Cache-Management/)，Worker 如何加载权重、准备 GPU 执行见 [Model Execution](../../05-Model-Execution/) 和 [Model and Weight Loading](../../06-Model-and-Weight-Loading/)。
+本篇读清创建顺序和组件关系。缓存容量的计算方法见 [KV Cache Management](../../04-KV-Cache-Management/)，Worker 如何加载权重、准备 GPU 执行见 [Model and Weight Loading](../../05-Model-and-Weight-Loading/) 和 [Model Execution](../../06-Model-Execution/)。
 
 ## 2. 源码定位与关键对象
 

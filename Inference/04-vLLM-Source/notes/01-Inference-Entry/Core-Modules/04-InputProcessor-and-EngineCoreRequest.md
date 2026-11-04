@@ -4,6 +4,10 @@
 
 ## 1. 职责与边界
 
+**本篇负责：** 输入/参数校验、参数克隆与补全、EngineCoreRequest 构造和内部 ID 分配算法。
+
+**终点：** 到可提交请求为止；不登记 RequestState、不入调度队列、不解释执行期判停。
+
 `InputProcessor` 持有模型、调度、缓存和生成相关配置，判断当前输入与参数能否用于执行。生成主线由 `LLMEngine.add_request` 调用它。
 
 ```text
@@ -36,7 +40,7 @@ EngineInput + 外部请求 ID + SamplingParams
 | `cache_salt`、`lora_request` | 缓存隔离及适配器信息 |
 | `mm_features` | 多模态扩展信息；本篇普通文本路径中为空 |
 
-`EngineCoreRequest` 使用 `msgspec.Struct` 定义，是跨引擎边界传递的结构。进入核心后还会形成调度侧的 `Request`；两者承担的职责不同，后者在 Engine Core 章节展开。
+`EngineCoreRequest` 使用 `msgspec.Struct` 定义，是跨引擎边界传递的结构。进入核心后还会形成调度侧的 `Request`；两者承担的职责不同；转换调用归 02，Request 的状态与进度归 03。
 
 ## 3. 实现分析
 

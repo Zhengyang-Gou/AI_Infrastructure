@@ -4,6 +4,10 @@
 
 ## 1. 职责与边界
 
+**本篇负责：** RequestState、ID 映射维护、增量解码、停止字符串、输出对象与入口状态清理。
+
+**终点：** 交出 RequestOutput 与待取消内部 ID 为止；不展开采样、核心判停、取消传输与 KV 回收。
+
 ```text
 提交时：EngineCoreRequest → RequestState，记录输入与输出配置
 
@@ -340,7 +344,7 @@ def _finish_request(self, req_state: RequestState) -> None:
     → 命中停止字符串，将显示文本截为“答案”
     → 输出侧标记 STOP，构造最终 RequestOutput
     → 如果核心原本尚未结束，将内部 ID 加入 reqs_to_abort
-    → LLMEngine 通知核心取消并完成资源清理
+    → 返回用户结果与 reqs_to_abort；本篇到此结束
 ```
 
 这里的文本片段用于说明解码行为，实际 Token 切分取决于 tokenizer。若设置 `min_tokens`，停止检查还需遵守最短生成长度要求。

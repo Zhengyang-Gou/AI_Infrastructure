@@ -2,7 +2,7 @@
 
 **Scheduler 将请求剩余的计算需求与本轮预算、运行名额和 KV Cache 条件对齐，形成执行计划，再根据结果推进请求。**
 
-场景设定见[顶层 README](../README.md) 第 1 节，本文第 6 节的推演即其中的案例 A。先用基础 `Scheduler` 和每轮结果返回后再开始下一轮的顺序建立认识，最后再看异步调度。读完应能手工解释：谁入选、算多少、谁等待、谁被抢占，以及下一轮为什么还能继续。
+场景设定见[顶层 README](../README.md) 第 1 节。本章唯一维护案例 A 的条件与四轮表。只展开基础 `Scheduler`，每轮结果返回后再开始下一轮；异步占位和推测验证归 09。读完应能手工解释：谁入选、算多少、谁等待、谁被抢占，以及下一轮为什么还能继续。
 
 ## 1. 接上上一章：进入 schedule 内部
 
@@ -57,9 +57,7 @@ Scheduler
 | --- | --- |
 | Request.num_prompt_tokens | 输入 Prompt 的 token 数 |
 | Request.num_tokens | 已知的 Prompt 与正式输出 token 总数 |
-| Request.num_tokens_with_spec | num_tokens 加上当前推测 token 的数量 |
 | Request.num_computed_tokens | 调度侧已推进的 token 位置，可能包含在途工作 |
-| Request.num_output_placeholders | 异步调度为尚未返回的输出预留的数量 |
 | SchedulerOutput.num_scheduled_tokens | request_id 到本轮计算 token 数的映射 |
 
 先忽略推测 token、异步占位与缓存命中，运行请求的需求可以写成下面的**公式示意**：
@@ -67,9 +65,6 @@ Scheduler
 ```text
 待计算数量 = num_tokens - num_computed_tokens
 本轮计算量 = 待计算数量，再受剩余预算、长度及缓存条件限制
-
-完整 RUNNING 路线的初始需求：
-num_tokens_with_spec + num_output_placeholders - num_computed_tokens
 ```
 
 例如 Prompt 有 6 个 token：
@@ -155,19 +150,21 @@ Scheduler 按 `running` 列表顺序访问请求，计算进度差，应用分�
 | finished_req_ids | 通知执行侧清理此前已结束请求的缓存状态 |
 | scheduled_spec_decode_tokens、scheduled_encoder_inputs 等 | 支持推测解码、多模态等附加工作 |
 
-这里的「cached request」指执行侧已经保存请求状态，不能据此判断该请求命中了 Prefix Cache。恢复请求如何包装还取决于 Model Runner 版本：本地 V2 路线把恢复请求并入 `scheduled_new_reqs`，另一条路线通过 cached 数据传递恢复信息。
+这里的「cached request」指执行侧已经保存请求状态，不能据此判断该请求命中了 Prefix Cache。恢复请求如何包装还取决于 Model Runner 版本：本笔记固定的 Model Runner 路线通过 cached 数据传递恢复信息；其他 Runner 的差异不在此展开。
 
 `schedule()` 先用原始执行起点构造计划，再调用 `_update_after_schedule()`：增加 Request 的 `num_computed_tokens` 与 `num_in_flight_tokens`，并更新是否仍处于 Prefill 分块的标记。因此 **schedule 已经改变请求状态**，并非只返回一份计划。
 
-进度提前推进让后续调度能够继续安排未覆盖的位置。它表示调度侧已经安排到哪里；执行结果回来前，其中可能还有在途计算，推测 token 被拒绝时还需要修正。
+该字段记录调度侧安排到哪里；增加时不表示对应 GPU 工作已经完成。本章只跟踪单批在途的推进与结果结算，优化路径的额外修正规则归 09。
 
 ## 6. 用三条请求走完四轮
 
-本节即[顶层 README](../README.md) 里的案例 A，其他模块引用这组数字。设每轮 token 预算为 **4**，`max_num_seqs=2`，启用 Chunked Prefill，`long_prefill_token_threshold=0`。KV 容量充足、长度限制不触发，无前缀命中、推测解码、异步占位或提前停止。
+本节是案例 A 的唯一完整推演。设每轮 token 预算为 **4**，`max_num_seqs=2`，启用 Chunked Prefill，`long_prefill_token_threshold=0`。KV 容量充足、长度限制不触发，无前缀命中、推测解码、异步占位或提前停止。
 
 - B：2 个 Prompt token，最多生成 2 个 token，先于 A 入队。
 - A：6 个 Prompt token，最多生成 2 个 token。
 - C：2 个 Prompt token，最多生成 2 个 token，在第 3 轮开始前到达。
+
+这是逐轮调度案例：通过测试驱动或低层逐轮调用在第 3 轮前提交 C；不能将它当作单次阻塞 `LLM.generate([B, A])` 会自动接收 C 的行为。
 
 每轮执行结果处理完成后，再开始下一轮：
 
@@ -211,7 +208,6 @@ RUNNING
 按本轮计划遍历 request_id
     → 扣减对应在途计数，检查请求是否仍有效
     → 通过 req_id_to_index 找到模型返回的 token
-    → 需要时修正推测 token 被拒绝后的进度
     → _update_request_with_output：逐个追加有效 token，调用 check_stop
     → 未结束：保留 Request，下一轮根据新进度继续安排
     → 已结束：更新状态、移出队列、释放资源引用
@@ -224,20 +220,11 @@ RUNNING
 
 外部取消通过 `finish_requests()` 进入清理。若模型执行期间已经取消请求，更新结果时会跳过不存在或已结束的请求；完成 ID 还会通过后续 SchedulerOutput 通知执行侧清理其保存的状态。
 
-## 9. 进入异步与扩展分支之前
+## 9. 本章停止的位置
 
-| 扩展 | 相对基础主线增加什么 |
-| --- | --- |
-| AsyncScheduler | 在已安排生成的位置上增加输出占位，结果回来后扣减；允许后续计划在真实 token 尚未返回调度侧时继续形成 |
-| 推测解码 | 需求还包含 draft token；本轮可返回多个有效 token，被拒绝部分需要回退进度 |
-| 多模态与结构化输出 | encoder 计算与缓存预算、grammar 就绪状态等额外约束 |
-| 远端 KV、流式输入与分布式执行 | 额外等待状态、传输完成检查、预留资源及轮次协调 |
+本章使用 KVCacheManager 的接口结果，不进入前缀匹配、块池或引用计数。模型结果按约定已经给出正式 token，本章不推导 logits、采样或推测验证。
 
-`SchedulerConfig.get_scheduler_cls()` 根据配置选择基础 Scheduler、AsyncScheduler 或自定义实现。本文先读基础类是为了看清顺序，实际类型需以运行配置为准。
-
-AsyncScheduler 继承基础算法，重点扩展 `_update_after_schedule()` 与 `_update_request_with_output()`。阅读时同时跟踪 `num_computed_tokens`、`num_in_flight_tokens` 和 `num_output_placeholders`：它们分别描述调度进度、尚未处理结果的计算量和待返回输出占位。抢占时还需处理原先在途结果，避免它们错误修改已经重置的进度。
-
-第二章的 batch queue 负责保存多批在途执行及其计划、Future，AsyncScheduler 负责请求进度与占位；同进程 / 多进程则描述通信与驱动方式。这几个维度需要分别追踪。
+实际配置必须选择基础 Scheduler。AsyncScheduler、输出占位与多批在途的实现统一归 09，不在本章延伸。
 
 ## 10. 回到源码的阅读路线与自测
 
@@ -250,7 +237,6 @@ AsyncScheduler 继承基础算法，重点扩展 `_update_after_schedule()` 与 
 | 03 | scheduler.py · WAITING 路线（L683 起）、_select_waiting_queue_for_scheduling（L2064）；[request_queue.py](../../vllm/vllm/v1/core/sched/request_queue.py) | 新请求何时接纳？何时跳过，何时停止？ |
 | 04 | scheduler.py · _preempt_request（L1274）；[kv_cache_manager.py](../../vllm/vllm/v1/core/kv_cache_manager.py) · get_computed_blocks（L229）、allocate_slots（L344） | 命中如何变成进度？分配失败如何触发抢占或等待？ |
 | 05 | [output.py](../../vllm/vllm/v1/core/sched/output.py) · SchedulerOutput（L193）；scheduler.py · _update_after_schedule（L1317）、update_from_output（L1670）、_update_request_with_output（L2094）、finish_requests（L2237）；[utils.py](../../vllm/vllm/v1/core/sched/utils.py) · check_stop | 计划保存什么？哪些状态在执行前推进，哪些在结果返回后更新？ |
-| 06 | [async_scheduler.py](../../vllm/vllm/v1/core/sched/async_scheduler.py) · AsyncScheduler（L12）；配置 · get_scheduler_cls（L170） | 在途计算与输出占位怎样衔接？实际选择了哪个调度器？ |
 
 回看时尝试回答：
 

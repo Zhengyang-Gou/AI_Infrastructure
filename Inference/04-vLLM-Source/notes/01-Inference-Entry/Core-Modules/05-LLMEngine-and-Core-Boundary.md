@@ -4,6 +4,10 @@
 
 ## 1. 职责与边界
 
+**本篇负责：** LLMEngine 的组件组装、输入处理/状态登记/提交的调用顺序、取输出与取消转交。
+
+**终点：** 调用到 processor/client 接口为止；内部 ID 算法归第 04 篇，输出状态与解码实现归第 06 篇，客户端内部归 02 章。
+
 `LLMEngine` 是入口侧的协调组件，持有 renderer、输入处理器、输出处理器和核心客户端。
 
 ```text
@@ -19,8 +23,7 @@ step：取得核心输出 → 处理输出 → 反馈取消 → 返回用户侧�
 | 文件 | 类 | 重点函数或结构 |
 | --- | --- | --- |
 | [v1/engine/llm_engine.py](../../../vllm/vllm/v1/engine/llm_engine.py) | `LLMEngine` | `__init__`、`add_request`、`step`、`has_unfinished_requests`、`abort_request` |
-| [v1/engine/core_client.py](../../../vllm/vllm/v1/engine/core_client.py) | `EngineCoreClient` | `make_client`；提交、取输出和取消的接口契约 |
-| 同上 | `InprocClient`、`SyncMPClient` | 同进程与同步多进程模式的 `get_output`、`add_request` |
+| [v1/engine/core_client.py](../../../vllm/vllm/v1/engine/core_client.py) | `EngineCoreClient` | 提交、取输出和取消的接口契约；不展开工厂 |
 | [v1/engine/__init__.py](../../../vllm/vllm/v1/engine/__init__.py) | `EngineCoreRequest`、`EngineCoreOutput`、`EngineCoreOutputs` | 跨边界的请求、单请求增量结果与结果批次 |
 | [v1/engine/parallel_sampling.py](../../../vllm/vllm/v1/engine/parallel_sampling.py) | `ParentRequest` | `n>1` 时的子请求与结果聚合 |
 
@@ -190,81 +193,17 @@ get_output：取得 EngineCoreOutputs
 
 `has_unfinished_requests` 主要读取输出处理器的未完成状态，并结合数据并行相关执行状态判断是否继续。离线入口因此无需直接查看 Scheduler 的队列。
 
-### 3.5 客户端隔离执行模式
+### 3.5 客户端接口契约
 
-```python
-# 文件：vllm/v1/engine/core_client.py
-# 类：EngineCoreClient
-# 函数：make_client
-# 源码范围：L89–L112（连续节选）
-@staticmethod
-def make_client(
-    multiprocess_mode: bool,
-    asyncio_mode: bool,
-    vllm_config: VllmConfig,
-    executor_class: type[Executor],
-    log_stats: bool,
-) -> "EngineCoreClient":
-    # TODO: support this for debugging purposes.
-    if asyncio_mode and not multiprocess_mode:
-        raise NotImplementedError(
-            "Running EngineCore in asyncio without multiprocessing "
-            "is not currently supported."
-        )
+入口把 EngineCoreClient 当作提交与结果接口，不读取其内部队列或调用核心步骤。
 
-    if multiprocess_mode and asyncio_mode:
-        return EngineCoreClient.make_async_mp_client(
-            vllm_config, executor_class, log_stats
-        )
-
-    if multiprocess_mode and not asyncio_mode:
-        return SyncMPClient(vllm_config, executor_class, log_stats)
-
-    return InprocClient(vllm_config, executor_class, log_stats)
-```
-
-对 `LLMEngine` 而言，提交与取输出接口保持一致，具体实现不同：
-
-| 模式 | 客户端 | 取输出时发生什么 |
+| 调用 | 输入 | 入口取得什么 |
 | --- | --- | --- |
-| 同进程 | `InprocClient` | 直接推进核心执行，再返回输出 |
-| 同步多进程 | `SyncMPClient` | 从输出队列取得后台核心传回的结果 |
-| 异步多进程 | `AsyncMPClient` 等 | 由异步入口使用相应接口；在线服务章节继续展开 |
+| add_request | EngineCoreRequest | 提交完成；后续结果通过 get_output 获取 |
+| get_output | 无 | 一批 EngineCoreOutputs，可能没有用户可见结果 |
+| abort_requests | 内部请求 ID 列表 | 向核心发出取消指令 |
 
-同进程模式的取输出代码直接调用核心的执行函数：
-
-```python
-# 文件：vllm/v1/engine/core_client.py
-# 类：InprocClient
-# 函数：get_output
-# 源码范围：L319–L322（连续节选）
-def get_output(self) -> EngineCoreOutputs:
-    outputs, model_executed = self.engine_core.step_fn()
-    self.engine_core.post_step(model_executed=model_executed)
-    return outputs and outputs.get(0) or EngineCoreOutputs()
-```
-
-同步多进程模式则从队列取输出，并传播后台错误：
-
-```python
-# 文件：vllm/v1/engine/core_client.py
-# 类：SyncMPClient
-# 函数：get_output
-# 源码范围：L872–L882（连续节选）
-def get_output(self) -> EngineCoreOutputs:
-    # If an exception arises in process_outputs_socket task,
-    # it is forwarded to the outputs_queue so we can raise it
-    # from this (run_output_handler) task to shut down the server.
-    outputs = self.outputs_queue.get()
-
-    if isinstance(outputs, Exception):
-        raise self._format_exception(outputs) from None
-    if outputs.wave_complete is not None:
-        self.engines_running = False
-    return outputs
-```
-
-因此，客户端方法名相同，不代表每次调用都在本地同步执行一次模型。消息编解码、后台循环与进程管理在 Engine Core 章节继续学习。
+客户端选择、同进程调用和后台消息循环的实现唯一归属 02。本篇到这三个接口为止。
 
 ### 3.6 取消也需要跨越输入输出两侧
 
@@ -306,6 +245,6 @@ def abort_request(self, request_ids: list[str], internal: bool = False) -> None:
 
 LLMEngine 将请求构造、输出状态与客户端组合成入口侧闭环。客户端隔离核心执行方式，输出处理器隔离增量结果的组织方式，使离线编排逻辑能复用这些能力。
 
-读完后应能解释：为什么状态注册放在核心提交之前？`self.engine_core` 是什么对象？同进程与多进程的 `step` 有什么差异？停止字符串为什么需要反馈取消？
+读完后应能解释：为什么状态注册放在核心提交之前？`self.engine_core` 是什么对象？get_output 的返回值为什么还不是用户结果？停止字符串为什么需要反馈取消？
 
 [章节目录](../README.md) · [上一篇：InputProcessor 与请求构造](04-InputProcessor-and-EngineCoreRequest.md) · [下一篇：输出处理与文本还原](06-OutputProcessor-and-Detokenization.md)

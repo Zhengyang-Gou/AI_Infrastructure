@@ -1,75 +1,61 @@
 # 03 · Scheduler
 
-本章学习 vLLM 的请求调度：**每一轮选哪些请求、各计算多少 token，资源不足时怎样取舍，执行结果回来后又如何继续？**
+**本章回答：每轮谁执行、算多少 token，请求何时等待、抢占或结束？**
 
-上一章已经串起 `schedule → execute_model / sample_tokens → update_from_output`。这一章进入 Scheduler 内部，将请求进度、token 预算、队列策略和 KV Cache 约束放到同一轮执行中理解。
+## 1. 职责边界
 
-固定场景见[顶层 README](../README.md) 第 1 节。先沿基础 `Scheduler` 和没有多批次在途的执行顺序阅读，再认识 `AsyncScheduler`、推测解码等扩展。
+| 项目 | 契约 |
+| --- | --- |
+| 输入 | Request、调度配置、KV 管理接口结果、模型结果或外部结束指令 |
+| 输出 | SchedulerOutput、更新后的 Request、EngineCoreOutputs 与资源交还指令 |
+| 本章负责 | Request/RequestStatus、请求表与队列、预算、接纳、抢占对象选择、同步进度、结果更新、核心判停与请求退场 |
+| 到此为止 | 用 KVCacheManager 返回的命中长度、块 ID、成功/失败形成调度决策；不进入块池和引用计数 |
 
-## 1. 本章在学习路线中的位置
+| 内容 | 唯一归属 |
+| --- | --- |
+| 核心调用顺序、客户端与进程循环 | 02 Engine Core |
+| 前缀匹配、块分配、淘汰与实际回收 | 04 KV Cache Management |
+| 输入张量、执行侧请求状态与模型前向 | 06 Model Execution |
+| logits 与采样算法 | 08 Sampling |
+| 停止字符串与输出状态 | 01 Inference Entry |
+| AsyncScheduler 占位、推测接受/拒绝、batch queue | 09 Runtime Optimizations |
 
-```text
-Engine Core：组织接收、调度、执行与结果返回
-    ↓ schedule                         ↑ update_from_output
-Scheduler：维护请求，决定本轮计算内容并更新执行状态       ← 本章
-    ├─ Request / RequestQueue：保存进度，组织等待与运行请求
-    ├─ KVCacheManager：检查缓存复用与块分配是否可行
-    └─ SchedulerOutput：将请求、计算量与缓存信息交给执行侧
-            ↓↑
-        Executor → Worker / Model Runner：执行模型与采样
-```
+EOS、停止 token 和长度等核心判停由本章负责，08 只产生采样结果。
 
-从 [第二章 Overview](../02-Engine-Core/Overview.md) 接着读即可。机制层可以回看 [Scheduler](../../../03-Engine-Core-Mechanisms/01-Scheduler.md)、[Continuous Batching](../../../03-Engine-Core-Mechanisms/02-Continuous-Batching.md) 和 [Chunked Prefill](../../../03-Engine-Core-Mechanisms/05-Chunked-Prefill.md)，本章把这些机制对应到本地源码的对象、字段与调用顺序。
+## 2. 正文范围与当前状态
 
-## 2. 章节框架
+先读 [Overview](Overview.md)。基础调度的完整分轮推演只在 Overview §6 维护。
 
-| 顺序 | 主题 | 要回答的问题 | 学习深度 |
-| --- | --- | --- | --- |
-| 01 | Scheduler、配置与请求状态 | 调度器保存什么？请求表、等待队列与运行列表如何分工？ | 掌握对象关系与生命周期 |
-| 02 | Token 进度与运行请求调度 | 如何从请求进度算出本轮需求？预算、长度和缓存怎样限制计算量？ | 本章重点，读透 RUNNING 路线 |
-| 03 | 等待请求接纳与连续批处理 | 新请求与抢占请求何时进入运行集合？FCFS、Priority 和 Prompt 分块怎样协作？ | 本章重点，读透 WAITING 路线 |
-| 04 | KV 约束、抢占与恢复 | 有 token 预算却分不到缓存块时怎么办？恢复为什么可能需要重算？ | 追踪选择、回退与重新接纳 |
-| 05 | 调度计划与结果更新 | SchedulerOutput 传什么？何时推进进度、追加输出、判停并清理？ | 串起完整调度闭环 |
-| 06 | 异步调度与扩展边界 | 结果尚未返回时怎样继续安排？哪些字段服务于推测解码和额外依赖？ | 先理解占位与在途状态，再按需展开 |
-
-## 3. 文档组织与阅读方式
-
-- **README** 说明本章范围、主题划分、源码入口与学习目标。
-- **[Overview](Overview.md)** 建立组件框架、进度模型和执行路线，并用分轮示例复盘。
-- **Core-Modules** 后续可按上面的六个主题展开，沿用前两章「职责与边界 → 源码定位与关键数据 → 实现分析 → 手工推演 → 设计原因与自测」的组织方式。
-
-先读 Overview，再按下面的顺序进入源码；目前的源码阅读入口均列在这两份文档中。
-
-| 顺序 | 主要源码 | 重点函数或结构 |
+| 顺序 | 主题 | 状态 |
 | --- | --- | --- |
-| 01 | [scheduler.py](../../vllm/vllm/v1/core/sched/scheduler.py)、[request.py](../../vllm/vllm/v1/request.py)、[配置](../../vllm/vllm/config/scheduler.py) | Scheduler.__init__、Request / RequestStatus、SchedulerConfig |
-| 02 | scheduler.py、request.py | schedule 的 RUNNING 循环、num_tokens / num_tokens_with_spec、num_computed_tokens |
-| 03 | scheduler.py、[request_queue.py](../../vllm/vllm/v1/core/sched/request_queue.py) | schedule 的 WAITING 循环、_select_waiting_queue_for_scheduling、FCFSRequestQueue / PriorityRequestQueue |
-| 04 | scheduler.py、[kv_cache_manager.py](../../vllm/vllm/v1/core/kv_cache_manager.py) | _preempt_request、get_computed_blocks、allocate_slots |
-| 05 | scheduler.py、[output.py](../../vllm/vllm/v1/core/sched/output.py)、[utils.py](../../vllm/vllm/v1/core/sched/utils.py) | SchedulerOutput、_update_after_schedule、update_from_output、_update_request_with_output、check_stop、finish_requests |
-| 06 | [async_scheduler.py](../../vllm/vllm/v1/core/sched/async_scheduler.py)、配置 | AsyncScheduler、num_output_placeholders、num_in_flight_tokens、get_scheduler_cls |
+| 01 | [Request 与调度队列](Core-Modules/01-Request-and-Queues.md) | 已有正文：初始状态、登记、队列归属 |
+| 02 | Token 进度与 RUNNING 请求预算 | Overview 已有说明；独立正文待写 |
+| 03 | WAITING 接纳与连续批处理 | Overview 已有说明；独立正文待写 |
+| 04 | KV 接口约束、抢占选择与恢复 | Overview 已有说明；独立正文待写 |
+| 05 | [结果更新、判停与请求退场](Core-Modules/05-Result-and-Completion.md) | 已有正文：输出追加、判停、退场与释放接口 |
 
-源码路径相对于 `04-vLLM-Source/vllm/`。函数源码节选沿用前两章的约定：代码块开头标注文件、类、函数和本地行范围；流程与公式示意单独说明。阅读时先确认本轮输入、持久状态与输出，再进入相关分支。
+01 负责状态起点与队列归属；02–04 负责形成计划；05 负责结果返回后的状态变化。每篇使用其他篇的结果，不重复展开算法。
 
-## 4. 相关章节的分工
+## 3. 源码入口
 
-| 位置 | 本章关注点 | 对应章节的重点 |
-| --- | --- | --- |
-| [02 · Engine Core](../02-Engine-Core/README.md) | schedule 与 update_from_output 怎样接入执行闭环 | 客户端、核心进程循环、执行器调用与结果返回 |
-| [04 · KV Cache Management](../04-KV-Cache-Management/) | 查询命中、申请块、分配失败后的调度选择与资源释放接口 | 块池、引用计数、前缀匹配、缓存淘汰与实际回收时机 |
-| [06 · Model Execution](../06-Model-Execution/) | 执行侧需要怎样的计划，结果怎样按请求 ID 对回 | 输入张量、位置、block table、模型前向与执行侧状态 |
-| [08 · Sampling](../08-Sampling/) | 取得有效新 token，检查请求是否结束 | 采样算法与从请求到输出的整条链路 |
-| [09 · Runtime Optimizations](../09-Runtime-Optimizations/) | 异步占位、推测 token 与调度进度如何衔接 | 批次重叠、推测解码等优化的完整执行机制 |
+路径相对于 `04-vLLM-Source/vllm/`；节选标注文件、类、函数与本地行范围。
 
-## 5. 本章学习目标
+| 文件 | 关注内容 |
+| --- | --- |
+| [request.py](../../vllm/vllm/v1/request.py) | Request、RequestStatus、token 历史与进度 |
+| [scheduler.py](../../vllm/vllm/v1/core/sched/scheduler.py) | add_request、schedule、_preempt_request、_update_after_schedule、update_from_output、finish_requests |
+| [request_queue.py](../../vllm/vllm/v1/core/sched/request_queue.py) | FCFSRequestQueue、PriorityRequestQueue |
+| [output.py](../../vllm/vllm/v1/core/sched/output.py) | SchedulerOutput 及请求数据契约 |
+| [utils.py](../../vllm/vllm/v1/core/sched/utils.py) | check_stop |
+| [配置](../../vllm/vllm/config/scheduler.py) | 预算、队列策略与基础调度器配置 |
 
-- 解释 `requests`、`waiting`、`skipped_waiting` 与 `running` 的职责，以及它们如何引用同一条 Request。
-- 用 `num_tokens`、`num_computed_tokens` 与 `num_scheduled_tokens` 解释 Prefill、Prompt 分块和普通 Decode。
-- 区分本轮 token 预算、运行请求数量限制、单请求长度限制与 KV Cache 容量约束。
-- 沿「先运行请求、再等待请求」追踪一轮选择，并说明 FCFS / Priority 的作用范围。
-- 用逐轮示例解释 Continuous Batching 与 Chunked Prefill 如何在同一个 schedule 中实现。
-- 说明抢占、恢复与完成的区别，理解保留 token 历史后为什么仍可能重算 KV。
-- 串起 `SchedulerOutput → 模型执行结果 → Request 更新 → 核心增量输出`，解释调度进度为什么会在结果返回前推进。
-- 区分基础调度、AsyncScheduler 和 Engine Core 的 batch queue，认识在途进度与输出占位。
+## 4. 验收
 
-[开始阅读 Overview](Overview.md) · [上一章：Engine Core](../02-Engine-Core/README.md) · [下一章：KV Cache Management](../04-KV-Cache-Management/) · [返回推理学习路线](../../../Roadmap.md)
+- 手算案例 A 的每轮预算、运行集合与输出增长。
+- 解释 RUNNING 为什么可能仍在 Prefill。
+- 区分 token 预算、运行名额、总长度与 KV 容量限制。
+- 区分“请求被抢占”和“请求已经结束”。
+- 指出调度时推进的字段与结果返回后才更新的字段。
+- 解释采样结果到达后，谁判停、谁退出队列、谁接到释放指令。
+
+[源码纵览](../00-Overview.md) · [下一章：KV Cache Management](../04-KV-Cache-Management/README.md)

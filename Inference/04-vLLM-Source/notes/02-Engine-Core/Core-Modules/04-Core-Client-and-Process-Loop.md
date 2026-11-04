@@ -35,7 +35,42 @@
 
 ## 3. 实现分析
 
-### 3.1 同进程：直接接收，取输出时推进
+### 3.1 选择客户端
+
+```python
+# 文件：vllm/v1/engine/core_client.py
+# 类：EngineCoreClient
+# 函数：make_client
+# 源码范围：L89–L112（连续节选）
+@staticmethod
+def make_client(
+    multiprocess_mode: bool,
+    asyncio_mode: bool,
+    vllm_config: VllmConfig,
+    executor_class: type[Executor],
+    log_stats: bool,
+) -> "EngineCoreClient":
+    # TODO: support this for debugging purposes.
+    if asyncio_mode and not multiprocess_mode:
+        raise NotImplementedError(
+            "Running EngineCore in asyncio without multiprocessing "
+            "is not currently supported."
+        )
+
+    if multiprocess_mode and asyncio_mode:
+        return EngineCoreClient.make_async_mp_client(
+            vllm_config, executor_class, log_stats
+        )
+
+    if multiprocess_mode and not asyncio_mode:
+        return SyncMPClient(vllm_config, executor_class, log_stats)
+
+    return InprocClient(vllm_config, executor_class, log_stats)
+```
+
+本篇沿 InprocClient 与 SyncMPClient。异步客户端的公共交付方式留在 11。
+
+### 3.2 同进程：直接接收，取输出时推进
 
 ```python
 # 文件：vllm/v1/engine/core_client.py
@@ -74,7 +109,7 @@ LLMEngine.step
 
 因此，同进程的 `get_output()` 同时承担推进核心和取得结果的作用。
 
-### 3.2 多进程：提交是发消息，取输出是读接收队列
+### 3.3 多进程：提交是发消息，取输出是读接收队列
 
 ```python
 # 文件：vllm/v1/engine/core_client.py
@@ -111,7 +146,7 @@ def get_output(self) -> EngineCoreOutputs:
 
 这里没有直接调用核心 step，而是等待客户端接收队列中的结果。接收线程转交的后台异常也会在这里抛出。`wave_complete` 对应数据并行协调，单核心主线先关注结果的取得。
 
-### 3.3 后台循环先处理输入，再执行核心
+### 3.4 后台循环先处理输入，再执行核心
 
 `EngineCoreProc` 继承 EngineCore，复用其调度与执行能力，并增加进程通信和循环：
 
@@ -156,7 +191,7 @@ ADD 消息里的请求已经由输入线程预处理为 Request，循环中继�
 
 循环允许在执行轮次之间接收新请求和取消。它不需要等一条请求生成完整回答后，才接收另一条请求。
 
-### 3.4 执行一轮，把结果交给输出线程
+### 3.5 执行一轮，把结果交给输出线程
 
 ```python
 # 文件：vllm/v1/engine/core.py

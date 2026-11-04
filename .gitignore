@@ -46,6 +46,7 @@ dist/
 # Editors and OS files
 .vscode/
 .idea/
+.obsidian/
 *.swp
 *.swo
 .DS_Store

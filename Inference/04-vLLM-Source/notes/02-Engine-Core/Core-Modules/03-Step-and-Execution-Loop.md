@@ -1,6 +1,6 @@
 # 03 · Step 与执行闭环
 
-**这一篇是本章中心：EngineCore 怎样组织一轮调度、执行和结果更新。** 先沿普通 `step()` 阅读，再理解 batch queue 分支如何保留同样的交接关系。
+**这一篇是本章中心：EngineCore 怎样组织一轮调度、执行和结果更新。** 本篇只展开普通同步 `step()`，到调度与执行接口为止。
 
 ## 1. 职责与边界
 
@@ -22,7 +22,7 @@ EngineCore 组织这几步的顺序与数据传递。请求选择策略、缓存
 
 | 文件 | 类 | 关注内容 |
 | --- | --- | --- |
-| [vllm/v1/engine/core.py](../../../vllm/vllm/v1/engine/core.py) | EngineCore | step、step_with_batch_queue、post_step |
+| [vllm/v1/engine/core.py](../../../vllm/vllm/v1/engine/core.py) | EngineCore | step、post_step；多批在途实现归 09 |
 | [vllm/v1/core/sched/scheduler.py](../../../vllm/vllm/v1/core/sched/scheduler.py) | Scheduler | schedule、update_from_output |
 | [vllm/v1/executor/abstract.py](../../../vllm/vllm/v1/executor/abstract.py) | Executor | execute_model、sample_tokens |
 | [vllm/v1/core/sched/output.py](../../../vllm/vllm/v1/core/sched/output.py) | SchedulerOutput | 选中的请求、逐请求计算量、缓存块信息、结束请求通知 |
@@ -107,7 +107,7 @@ return engine_core_outputs, scheduler_output.total_num_scheduled_tokens > 0
 
 在模型执行期间，输入线程可能已经收到取消。核心先处理这些取消，再把本轮模型结果交给 Scheduler，避免继续将被取消请求当成正常活跃请求。
 
-`update_from_output()` 结合计划和结果：计划说明本轮安排了哪些请求、多少计算，模型结果提供每条请求产生的 token 等信息。它据此找到 Request、追加有效的新 token、判断结束、安排清理，再构造核心输出。未结束的 Request 继续保存，供下一次调度使用。
+`update_from_output()` 结合计划和结果：计划说明本轮安排了哪些请求、多少计算，模型结果提供每条请求产生的 token 等信息。调用返回按客户端组织的核心输出。Request 如何更新、判停和退场，均留在 Scheduler 内部。
 
 返回值分为两部分：
 
@@ -122,51 +122,24 @@ return engine_core_outputs, scheduler_output.total_num_scheduled_tokens > 0
 
 `step()` 组织一轮工作。驱动它反复运行的是客户端调用或后台核心循环，见 [核心客户端与进程循环](04-Core-Client-and-Process-Loop.md)。
 
-调用方在取得结果后调用 `post_step()`。这份源码中的该方法主要在满足相应条件时，取得推测生成所用的 draft token 并更新 Scheduler。普通无推测生成的文本路径通常不进入这个分支。
+调用方在取得结果后调用 `post_step()`。固定的无推测生成主线不进入其扩展处理；优化路径的具体工作归 09。本篇只确认驱动方会在 step 之后调用这个钩子。
 
-### 3.5 batch queue：计划和结果仍然一一配对
+## 4. 只检查交接，不复演调度
 
-`step_with_batch_queue()` 使用相同的调度、执行和更新接口，同时允许多个批次在途。关键是把 Future 与产生它的调度计划放在一起：
+| 顺序 | 核心持有的数据 | 核心动作 |
+| --- | --- | --- |
+| 1 | 计划 P | 传给 execute_model |
+| 2 | 对应结果 R | 等待并取得；需要时继续 sample_tokens |
+| 3 | 同一轮 P 与 R | 传给 update_from_output |
+| 4 | 核心输出 O | 交还驱动方 |
 
-```python
-# 文件：vllm/v1/engine/core.py
-# 类：EngineCore
-# 函数：step_with_batch_queue
-# 源码范围：L679–L687（连续节选）
-if not deferred_scheduler_output:
-    # Add this step's future to the queue.
-    batch_queue.appendleft((future, scheduler_output, exec_future))
-    if len(batch_queue) < self.batch_queue_size and (
-        model_executed or self.scheduler.has_requests()
-    ):
-        # Don't block on next worker response unless the queue is full
-        # or there are no more requests to schedule.
-        return None, model_executed
-```
-
-`future` 用于取得最终的 ModelRunnerOutput，`scheduler_output` 对应本轮计划，`exec_future` 用于保留模型执行的完成或异常信息。收取较早批次时，从队列取回这一组，再调用 `update_from_output()`。
-
-队列还能接纳工作时，一次调用可能先下发新批次并返回 `None`，稍后才收取在途结果。调用方会继续检查 Scheduler 工作和 batch queue，因此暂时没有输出不等于所有请求结束。
-
-## 4. 手工推演：计算量与生成量
-
-设 A 有 4 个输入 token，最多生成 2 个；B 有 2 个输入 token，最多生成 3 个。资源足够，首轮可算完整输入，无缓存命中、推测生成或提前停止：
-
-| 轮次 | Scheduler 安排的计算量 | 模型产生的输出 | 请求变化 |
-| --- | --- | --- | --- |
-| 1 | A=4、B=2，总计 6 | A、B 各生成第 1 个 token | 都继续 |
-| 2 | A=1、B=1，总计 2 | A、B 各生成第 2 个 token | A 达到上限，B 继续 |
-| 3 | B=1 | B 生成第 3 个 token | B 达到上限 |
-
-首轮处理 6 个输入位置，生成的是两个请求各自的第一个输出 token。下一轮再使用刚生成的 token，继续前向计算并采样。
-
-长 Prompt 如果分块，某轮可能只推进 Prefill 进度，没有正式输出 token；请求仍需要继续。`Request.num_computed_tokens` 在调度时就会推进，结果回来后还可能修正，因此要把调度进度、在途工作和新生成的 token 分开理解。
+本篇不计算 P 内的 token 数，不修改 Request 进度，不解释采样算法。多批次在途的计划/Future 配对归 09。
 
 ## 5. 阅读检查
 
 - 能否沿 schedule → execute_model / sample_tokens → update_from_output 解释每次数据交接？
 - 为什么 Executor 需要执行计划，Scheduler 更新时还需要同一份计划？
-- 计算了多个 Prompt token，为什么通常只生成第一个输出 token？
-- 同进程 / 多进程与是否启用 batch queue，分别决定什么？
+- 更新接口返回的字典与入口返回的用户结果列表有什么区别？
+- 谁调用 step，谁取得并转发它的返回值？
 
 [章节目录](../README.md) · [上一篇：Request 与请求接收](02-Request-and-Admission.md) · [下一篇：核心客户端与进程循环](04-Core-Client-and-Process-Loop.md)

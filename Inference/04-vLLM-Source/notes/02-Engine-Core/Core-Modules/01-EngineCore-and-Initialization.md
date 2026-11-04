@@ -15,7 +15,7 @@ EngineCore.__init__
     → 选择 step_fn
 ```
 
-本篇读清创建顺序和组件关系。缓存容量的计算方法见 [KV Cache Management](../../04-KV-Cache-Management/)，Worker 如何加载权重、准备 GPU 执行见 [Model and Weight Loading](../../05-Model-and-Weight-Loading/) 和 [Model Execution](../../06-Model-Execution/)。
+本篇只读核心的创建顺序和接口调用。缓存容量规则归 04，实际模型/权重/KV 张量初始化归 05；不沿调用进入下游实现。
 
 ## 2. 源码定位与关键对象
 
@@ -55,7 +55,7 @@ if executor_fail_callback is not None:
 
 `executor_class` 是传进来的类，调用它就会执行构造过程。返回的实例保存在 `self.model_executor`，供缓存准备和每轮执行复用。
 
-Executor 的构造会继续调用具体实现的 `_init_executor()`，由实现组织 Worker 和模型加载。这也是为什么创建核心需要实际准备执行资源，不能只把这一行理解为保存配置。
+这次构造调用返回已初始化的执行器。Worker 与模型加载属于该接口的内部工作，本篇不继续进入。
 
 ### 3.2 先确定缓存资源，再创建调度器
 
@@ -137,9 +137,9 @@ self.aborts_queue = queue.Queue[list[str]]()
 | 条件 | step_fn 指向 | 作用 |
 | --- | --- | --- |
 | 没有 batch_queue | step | 顺序组织一轮调度、执行、结果更新 |
-| 存在 batch_queue | step_with_batch_queue | 将计划与 Future 配对保存，允许多批次在途 |
+| 存在 batch_queue | step_with_batch_queue | 使用优化步骤；内部配对与收取规则归 09 |
 
-在这份源码中，`max_concurrent_batches > 1` 时创建 batch queue。这个选择与客户端是否跨进程通信是两个维度；同进程和多进程路径都会调用 `step_fn()`。
+固定主线没有 batch queue，step_fn 指向 step。优化路径的启用规则与多批在途实现归 09；本篇只确认核心保存了哪个方法引用。客户端是否跨进程是独立的通信选择。
 
 `aborts_queue` 保存等待核心处理的取消 ID。它用于衔接消息接收与执行结果更新，见 [完成、取消与清理](05-Completion-and-Abort.md)。
 
